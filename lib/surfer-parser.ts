@@ -18,6 +18,19 @@ export interface SurferReportData {
   questions: string[];
   headings: string[];
   error?: string;
+  debug?: {
+    pageTitle?: string;
+    url?: string;
+    extractionMethod?: string;
+    pageContent?: {
+      bodyLength: number;
+      hasTable: boolean;
+      hasTr: number;
+      hasTermClass: number;
+      hasRowClass: number;
+      visibleTextSample: string;
+    };
+  };
 }
 
 // Track if we're using Browserless.io (for proper cleanup)
@@ -26,12 +39,16 @@ let usingBrowserless = false;
 async function getBrowser(): Promise<Browser> {
   const browserlessToken = process.env.BROWSERLESS_TOKEN;
 
-  // Production: Use Browserless.io cloud browser
+  // Production: Use Browserless.io cloud browser with stealth mode
   if (browserlessToken) {
-    console.log('[Surfer Parser] Connecting to Browserless.io...');
+    console.log('[Surfer Parser] Connecting to Browserless.io with stealth mode...');
     usingBrowserless = true;
+
+    // Add stealth and block detection params
+    const wsEndpoint = `wss://chrome.browserless.io?token=${browserlessToken}&stealth=true&blockAds=true`;
+
     return puppeteer.connect({
-      browserWSEndpoint: `wss://chrome.browserless.io?token=${browserlessToken}`,
+      browserWSEndpoint: wsEndpoint,
     });
   }
 
@@ -67,6 +84,7 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
   }
 
   let browser: Browser | null = null;
+  const debugInfo: SurferReportData['debug'] = {};
 
   try {
     console.log('[Surfer Parser] Launching browser...');
@@ -75,66 +93,114 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
 
     const page = await browser.newPage();
 
-    // Set viewport and user agent
+    // Enhanced stealth settings
     await page.setViewport({ width: 1920, height: 1080 });
     await page.setUserAgent(
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     );
+
+    // Set extra headers to appear more human
+    await page.setExtraHTTPHeaders({
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    });
+
+    // Mask webdriver detection
+    await page.evaluateOnNewDocument(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => false });
+      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+      Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+      // @ts-ignore
+      window.chrome = { runtime: {} };
+    });
 
     console.log('[Surfer Parser] Navigating to:', reportUrl);
 
-    // Navigate with extended timeout
+    // Navigate with extended timeout - use networkidle0 for better SPA support
     await page.goto(reportUrl, {
-      waitUntil: 'networkidle2',
+      waitUntil: 'networkidle0',
       timeout: 45000
     });
+
+    // IMPORTANT: Wait longer for SPA to fully render
+    console.log('[Surfer Parser] Waiting for SPA to render...');
+    await new Promise(resolve => setTimeout(resolve, 5000));
 
     // Wait for content to load
     console.log('[Surfer Parser] Waiting for content to load...');
 
     await Promise.race([
       page.waitForSelector('button', { timeout: 15000 }),
-      page.waitForSelector('main', { timeout: 15000 })
+      page.waitForSelector('main', { timeout: 15000 }),
+      page.waitForSelector('table', { timeout: 15000 }),
+      page.waitForSelector('[class*="term"]', { timeout: 15000 })
     ]).catch(() => console.log('[Surfer Parser] Initial selectors not found, continuing...'));
 
     // Extra wait for dynamic content
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, 3000));
 
-    // Click "Show details" button for Terms to Use section to reveal the terms table
-    console.log('[Surfer Parser] Looking for Terms to Use section...');
+    // Try multiple strategies to click expand/show details buttons
+    console.log('[Surfer Parser] Looking for expand buttons...');
 
     try {
-      // Find and click the Show details button for Terms to Use
+      // Click all buttons that might expand content
       await page.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll('button'));
-        // Find button that's near "Terms to Use" text
-        for (let i = 0; i < buttons.length; i++) {
-          const btn = buttons[i];
-          const parent = btn.closest('section, div');
-          const parentText = parent?.textContent || '';
-          if (parentText.includes('Terms to Use') && btn.textContent?.includes('Show details')) {
-            (btn as HTMLButtonElement).click();
-            return true;
+        const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+        let clicked = 0;
+
+        for (const btn of buttons) {
+          const text = (btn.textContent || '').toLowerCase();
+          const ariaExpanded = btn.getAttribute('aria-expanded');
+
+          // Click buttons that look like expand buttons
+          if (
+            text.includes('show') ||
+            text.includes('expand') ||
+            text.includes('detail') ||
+            text.includes('more') ||
+            ariaExpanded === 'false'
+          ) {
+            try {
+              (btn as HTMLElement).click();
+              clicked++;
+            } catch (e) {
+              // Continue
+            }
           }
         }
-        // Fallback: click the button at index 4 (usually Terms to Use based on page structure)
-        if (buttons.length > 4 && buttons[4].textContent?.includes('Show details')) {
-          (buttons[4] as HTMLButtonElement).click();
-          return true;
-        }
-        return false;
+
+        return clicked;
       });
 
-      // Wait for table to load after clicking
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      console.log('[Surfer Parser] Clicked Show details, waiting for table...');
+      // Wait for content to expand
+      await new Promise(resolve => setTimeout(resolve, 3000));
+      console.log('[Surfer Parser] Clicked expand buttons, waiting for content...');
     } catch (err) {
-      console.log('[Surfer Parser] Could not click Show details button:', err);
+      console.log('[Surfer Parser] Could not click expand buttons:', err);
     }
 
-    console.log('[Surfer Parser] Extracting data...');
+    // Debug: Get page info
+    debugInfo.pageTitle = await page.title();
+    debugInfo.url = page.url();
 
-    // Extract all data from the page
+    // Debug: Check what's on the page
+    const pageDebugInfo = await page.evaluate(() => {
+      return {
+        bodyLength: document.body?.innerHTML?.length || 0,
+        hasTable: !!document.querySelector('table'),
+        hasTr: document.querySelectorAll('tr').length,
+        hasTermClass: document.querySelectorAll('[class*="term" i]').length,
+        hasRowClass: document.querySelectorAll('[class*="row" i]').length,
+        visibleTextSample: (document.body?.innerText || '').substring(0, 500)
+      };
+    });
+
+    debugInfo.pageContent = pageDebugInfo;
+    console.log('[Surfer Parser] Page debug - Table rows:', pageDebugInfo.hasTr, 'Term elements:', pageDebugInfo.hasTermClass);
+
+    console.log('[Surfer Parser] Extracting data with multiple strategies...');
+
+    // Extract all data from the page using multiple strategies
     const extractedData = await page.evaluate(() => {
       const data: {
         mainKeyword: string;
@@ -149,13 +215,15 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
         }>;
         questions: string[];
         headings: string[];
+        extractionMethod: string;
       } = {
         mainKeyword: '',
         contentScore: null,
         wordCount: null,
         terms: [],
         questions: [],
-        headings: []
+        headings: [],
+        extractionMethod: 'none'
       };
 
       // Helper to safely get text
@@ -165,11 +233,7 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
       };
 
       // 1. Try to get main keyword from SurferSEO header
-      // The header shows: "Audit / [flag] teacher liability insurance https://..."
-      // Look for the keyword in header/nav area
       const headerText = document.querySelector('header, nav, [class*="header"]')?.textContent || '';
-
-      // Try to extract keyword from header by looking for text between "/ " and "http"
       const headerKeywordMatch = headerText.match(/\/\s*[^\s]*\s+([^h]+?)(?:https?:|$)/i);
       if (headerKeywordMatch && headerKeywordMatch[1]) {
         data.mainKeyword = headerKeywordMatch[1].trim();
@@ -177,14 +241,7 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
 
       // Fallback to other selectors
       if (!data.mainKeyword) {
-        const keywordSelectors = [
-          'h1',
-          '[class*="keyword" i]',
-          '[class*="query" i]',
-          '[data-testid*="keyword"]',
-          '.audit-keyword'
-        ];
-
+        const keywordSelectors = ['h1', '[class*="keyword" i]', '[class*="query" i]'];
         for (const sel of keywordSelectors) {
           const text = getText(sel);
           if (text && text.length < 100 && !text.includes('\n') && !text.includes('http')) {
@@ -195,24 +252,9 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
       }
 
       // 2. Try to get content score
-      const scoreRegex = /(\d{1,3})(?:\s*\/\s*100|\s*%)?/;
-      const scoreSelectors = [
-        '[class*="score" i]',
-        '[class*="Score"]',
-        '[data-testid*="score"]'
-      ];
-
-      for (const sel of scoreSelectors) {
-        const elements = document.querySelectorAll(sel);
-        for (const el of elements) {
-          const text = el.textContent || '';
-          const match = text.match(scoreRegex);
-          if (match && parseInt(match[1]) <= 100) {
-            data.contentScore = parseInt(match[1]);
-            break;
-          }
-        }
-        if (data.contentScore) break;
+      const scoreMatch = document.body.innerText.match(/(\d{1,2})\s*\/\s*100/);
+      if (scoreMatch) {
+        data.contentScore = parseInt(scoreMatch[1]);
       }
 
       // 3. Try to get word count
@@ -223,125 +265,202 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
         data.wordCount = parseInt(wordMatch[1]);
       }
 
-      // 4. Extract terms/keywords - this is the main data we need
-      // SurferSEO displays terms in a list with usage counts
-      const termContainers = document.querySelectorAll(
-        '[class*="term" i], [class*="Term"], [class*="phrase" i], [class*="keyword-item"], li[class*="item"]'
-      );
-
-      termContainers.forEach(container => {
-        const text = container.textContent?.trim() || '';
-
-        // Skip if too long or too short
-        if (text.length < 2 || text.length > 200) return;
-
-        // Try to parse "term 2/5" or "term (2-5)" format
-        const termMatch = text.match(/^(.+?)\s*(?:(\d+)\s*\/\s*(\d+)|(\d+)\s*-\s*(\d+)|\((\d+)\s*-\s*(\d+)\))?$/);
-
-        if (termMatch) {
-          const term = termMatch[1].replace(/[•\-\*]/g, '').trim();
-          if (term.length < 2) return;
-
-          // Determine counts
-          let currentCount: number | null = null;
-          let recommendedMin: number | null = null;
-          let recommendedMax: number | null = null;
-
-          if (termMatch[2] && termMatch[3]) {
-            currentCount = parseInt(termMatch[2]);
-            recommendedMax = parseInt(termMatch[3]);
-            recommendedMin = Math.max(1, recommendedMax - 2);
-          } else if (termMatch[4] && termMatch[5]) {
-            recommendedMin = parseInt(termMatch[4]);
-            recommendedMax = parseInt(termMatch[5]);
-          } else if (termMatch[6] && termMatch[7]) {
-            recommendedMin = parseInt(termMatch[6]);
-            recommendedMax = parseInt(termMatch[7]);
-          }
-
-          // Determine status based on styling or content
-          let status = 'unknown';
-          const classList = container.className.toLowerCase();
-          const style = window.getComputedStyle(container);
-          const color = style.color;
-
-          if (classList.includes('missing') || classList.includes('red') || color.includes('255, 0') || color.includes('239, 68')) {
-            status = 'missing';
-          } else if (classList.includes('low') || classList.includes('yellow') || classList.includes('warning')) {
-            status = 'low';
-          } else if (classList.includes('good') || classList.includes('green') || classList.includes('success')) {
-            status = 'good';
-          } else if (classList.includes('over') || classList.includes('high')) {
-            status = 'overused';
-          }
-
-          data.terms.push({
-            term,
-            currentCount,
-            recommendedMin,
-            recommendedMax,
-            status
-          });
-        }
-      });
-
-      // 5. Extract from SurferSEO's table format (tr/td structure)
-      // This is the primary extraction method for audit reports
+      // STRATEGY 1: Extract from table rows (most reliable for SurferSEO)
       const tableRows = document.querySelectorAll('tr');
-      tableRows.forEach((row, index) => {
-        if (index === 0) return; // Skip header row
+      if (tableRows.length > 1) {
+        data.extractionMethod = 'table-rows';
+        tableRows.forEach((row, index) => {
+          if (index === 0) return; // Skip header row
 
-        const cells = row.querySelectorAll('td');
-        if (cells.length >= 4) {
-          // Column structure: term | example | you | suggested | sentiment | relevance | search volume | action
-          const termCell = cells[0];
-          const termText = termCell?.textContent?.trim().replace('NLP', '').trim() || '';
-          const yourCount = cells[2]?.textContent?.trim() || '0';
-          const suggestedCount = cells[3]?.textContent?.trim() || '1';
+          const cells = row.querySelectorAll('td');
+          if (cells.length >= 2) {
+            const termCell = cells[0];
+            const termText = termCell?.textContent?.trim().replace('NLP', '').trim() || '';
 
-          if (termText && termText.length > 1 && termText.length < 100) {
-            // Parse suggested count (can be "1" or "2-7" format)
+            // Get count from various cell positions
+            let yourCount = '0';
+            let suggestedCount = '1';
+
+            if (cells.length >= 4) {
+              yourCount = cells[2]?.textContent?.trim() || '0';
+              suggestedCount = cells[3]?.textContent?.trim() || '1';
+            } else if (cells.length >= 2) {
+              const countText = cells[1]?.textContent?.trim() || '';
+              const countMatch = countText.match(/(\d+)\s*\/\s*(\d+)/);
+              if (countMatch) {
+                yourCount = countMatch[1];
+                suggestedCount = countMatch[2];
+              }
+            }
+
+            if (termText && termText.length > 1 && termText.length < 100 && !termText.match(/^\d+$/)) {
+              let recommendedMin: number | null = null;
+              let recommendedMax: number | null = null;
+
+              const rangeMatch = suggestedCount.match(/(\d+)\s*-\s*(\d+)/);
+              if (rangeMatch) {
+                recommendedMin = parseInt(rangeMatch[1]);
+                recommendedMax = parseInt(rangeMatch[2]);
+              } else {
+                const singleMatch = suggestedCount.match(/(\d+)/);
+                if (singleMatch) {
+                  recommendedMin = 1;
+                  recommendedMax = parseInt(singleMatch[1]);
+                }
+              }
+
+              const currentCount = parseInt(yourCount) || 0;
+
+              let status = 'missing';
+              if (currentCount > 0) {
+                if (recommendedMin && recommendedMax) {
+                  if (currentCount < recommendedMin) status = 'low';
+                  else if (currentCount > recommendedMax) status = 'overused';
+                  else status = 'good';
+                } else {
+                  status = 'good';
+                }
+              }
+
+              data.terms.push({
+                term: termText,
+                currentCount,
+                recommendedMin,
+                recommendedMax,
+                status
+              });
+            }
+          }
+        });
+      }
+
+      // STRATEGY 2: Look for elements with "term" in class name
+      if (data.terms.length === 0) {
+        data.extractionMethod = 'class-term';
+        const termContainers = document.querySelectorAll(
+          '[class*="term" i], [class*="Term"], [class*="phrase" i], [class*="keyword-item"], li[class*="item"]'
+        );
+
+        termContainers.forEach(container => {
+          const text = container.textContent?.trim() || '';
+          if (text.length < 2 || text.length > 200) return;
+
+          const termMatch = text.match(/^(.+?)\s*(?:(\d+)\s*\/\s*(\d+)|(\d+)\s*-\s*(\d+)|\((\d+)\s*-\s*(\d+)\))?$/);
+
+          if (termMatch) {
+            const term = termMatch[1].replace(/[•\-\*]/g, '').trim();
+            if (term.length < 2) return;
+
+            let currentCount: number | null = null;
             let recommendedMin: number | null = null;
             let recommendedMax: number | null = null;
 
-            const rangeMatch = suggestedCount.match(/(\d+)\s*-\s*(\d+)/);
-            if (rangeMatch) {
-              recommendedMin = parseInt(rangeMatch[1]);
-              recommendedMax = parseInt(rangeMatch[2]);
-            } else {
-              const singleMatch = suggestedCount.match(/(\d+)/);
-              if (singleMatch) {
-                recommendedMin = 1;
-                recommendedMax = parseInt(singleMatch[1]);
-              }
+            if (termMatch[2] && termMatch[3]) {
+              currentCount = parseInt(termMatch[2]);
+              recommendedMax = parseInt(termMatch[3]);
+              recommendedMin = Math.max(1, recommendedMax - 2);
+            } else if (termMatch[4] && termMatch[5]) {
+              recommendedMin = parseInt(termMatch[4]);
+              recommendedMax = parseInt(termMatch[5]);
+            } else if (termMatch[6] && termMatch[7]) {
+              recommendedMin = parseInt(termMatch[6]);
+              recommendedMax = parseInt(termMatch[7]);
             }
 
-            const currentCount = parseInt(yourCount) || 0;
-
-            // Determine status based on current vs recommended
-            let status = 'missing';
-            if (currentCount > 0) {
-              if (recommendedMin && recommendedMax) {
-                if (currentCount < recommendedMin) status = 'low';
-                else if (currentCount > recommendedMax) status = 'overused';
-                else status = 'good';
-              } else {
-                status = 'good';
-              }
+            let status = 'unknown';
+            const classList = container.className.toLowerCase();
+            if (classList.includes('missing') || classList.includes('red')) {
+              status = 'missing';
+            } else if (classList.includes('low') || classList.includes('yellow')) {
+              status = 'low';
+            } else if (classList.includes('good') || classList.includes('green')) {
+              status = 'good';
+            } else if (classList.includes('over') || classList.includes('high')) {
+              status = 'overused';
             }
 
             data.terms.push({
-              term: termText,
+              term,
               currentCount,
               recommendedMin,
               recommendedMax,
               status
             });
           }
-        }
-      });
+        });
+      }
 
-      // 6. Extract questions (often in a separate section)
+      // STRATEGY 3: Look for divs with row-like structure
+      if (data.terms.length === 0) {
+        data.extractionMethod = 'div-rows';
+        const rowDivs = document.querySelectorAll('[class*="row" i], [class*="Row"], [class*="item" i], [class*="Item"]');
+        rowDivs.forEach(row => {
+          const children = row.querySelectorAll('div, span');
+          if (children.length >= 2) {
+            const termText = children[0]?.textContent?.trim();
+            const countText = children[1]?.textContent?.trim() || '';
+
+            if (termText && termText.length > 1 && termText.length < 80 && !termText.match(/^\d+$/)) {
+              const countMatch = countText.match(/(\d+)\s*\/\s*(\d+)/);
+              if (countMatch || termText.length < 40) {
+                data.terms.push({
+                  term: termText,
+                  currentCount: countMatch ? parseInt(countMatch[1]) : null,
+                  recommendedMin: null,
+                  recommendedMax: countMatch ? parseInt(countMatch[2]) : null,
+                  status: 'unknown'
+                });
+              }
+            }
+          }
+        });
+      }
+
+      // STRATEGY 4: List items
+      if (data.terms.length === 0) {
+        data.extractionMethod = 'list-items';
+        const listItems = document.querySelectorAll('li');
+        listItems.forEach(li => {
+          const text = li.textContent?.trim();
+          if (text && text.length > 2 && text.length < 80 && !text.includes('http')) {
+            const match = text.match(/^(.+?)\s*(\d+)\s*\/\s*(\d+)$/);
+            if (match) {
+              data.terms.push({
+                term: match[1].trim(),
+                currentCount: parseInt(match[2]),
+                recommendedMin: null,
+                recommendedMax: parseInt(match[3]),
+                status: 'unknown'
+              });
+            }
+          }
+        });
+      }
+
+      // STRATEGY 5: Regex search in page text for "word X/Y" patterns
+      if (data.terms.length === 0) {
+        data.extractionMethod = 'regex';
+        const pageText = document.body.innerText;
+        const termPattern = /([a-zA-Z][a-zA-Z\s]{1,40}?)\s+(\d{1,3})\s*\/\s*(\d{1,3})/g;
+        let match;
+        const seenTerms = new Set<string>();
+        while ((match = termPattern.exec(pageText)) !== null) {
+          const term = match[1].trim();
+          const termLower = term.toLowerCase();
+          if (term.length > 1 && !seenTerms.has(termLower)) {
+            seenTerms.add(termLower);
+            data.terms.push({
+              term,
+              currentCount: parseInt(match[2]),
+              recommendedMin: null,
+              recommendedMax: parseInt(match[3]),
+              status: 'unknown'
+            });
+          }
+        }
+      }
+
+      // Extract questions
       const questionSelectors = [
         '[class*="question" i] li',
         '[class*="Question"] li',
@@ -362,19 +481,16 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
         }
       });
 
-      // Also check for any text containing question marks
+      // Fallback: extract questions from page text
       if (data.questions.length === 0) {
         const allText = document.body.innerText;
-        const questionRegex = /([A-Z][^.!?]*\?)/g;
-        const matches = allText.match(questionRegex);
-        if (matches) {
-          data.questions = matches
-            .filter(q => q.length > 10 && q.length < 150)
-            .slice(0, 10);
+        const questionMatches = allText.match(/([A-Z][^.!?\n]{10,100}\?)/g);
+        if (questionMatches) {
+          data.questions = [...new Set(questionMatches)].slice(0, 10);
         }
       }
 
-      // 7. Extract heading suggestions
+      // Extract heading suggestions
       const headingSelectors = [
         '[class*="heading" i] li',
         '[class*="Heading"] li',
@@ -400,24 +516,31 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
     });
 
     // Deduplicate terms
-    const uniqueTerms = Array.from(
-      new Map(extractedData.terms.map((t) => [t.term.toLowerCase(), t])).values()
-    ) as SurferTerm[];
+    const seenTerms = new Set<string>();
+    const uniqueTerms = extractedData.terms.filter((t) => {
+      const key = t.term.toLowerCase();
+      if (seenTerms.has(key)) return false;
+      seenTerms.add(key);
+      return true;
+    }) as SurferTerm[];
 
     // Deduplicate questions
     const uniqueQuestions = [...new Set(extractedData.questions)];
 
+    debugInfo.extractionMethod = extractedData.extractionMethod;
+    console.log(`[Surfer Parser] Extraction method: ${extractedData.extractionMethod}`);
     console.log(`[Surfer Parser] Extracted ${uniqueTerms.length} terms, ${uniqueQuestions.length} questions`);
 
     return {
-      success: true,
+      success: uniqueTerms.length > 0,
       mainKeyword: extractedData.mainKeyword,
       url: reportUrl,
       contentScore: extractedData.contentScore,
       wordCount: extractedData.wordCount,
       terms: uniqueTerms,
       questions: uniqueQuestions,
-      headings: extractedData.headings
+      headings: extractedData.headings,
+      debug: debugInfo
     };
 
   } catch (error: unknown) {
@@ -432,15 +555,20 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
       terms: [],
       questions: [],
       headings: [],
-      error: errorMessage
+      error: errorMessage,
+      debug: debugInfo
     };
   } finally {
     if (browser) {
-      // For Browserless.io, disconnect instead of close
-      if (usingBrowserless) {
-        await browser.disconnect();
-      } else {
-        await browser.close();
+      try {
+        // For Browserless.io, disconnect instead of close
+        if (usingBrowserless) {
+          await browser.disconnect();
+        } else {
+          await browser.close();
+        }
+      } catch (e) {
+        console.log('[Surfer Parser] Browser cleanup error:', e);
       }
     }
   }
