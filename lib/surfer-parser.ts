@@ -1,4 +1,5 @@
-import puppeteer, { Browser } from 'puppeteer';
+import puppeteer, { Browser } from 'puppeteer-core';
+import chromium from '@sparticuz/chromium';
 
 export interface SurferTerm {
   term: string;
@@ -41,16 +42,12 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
   try {
     console.log('[Surfer Parser] Launching browser...');
 
+    // Use @sparticuz/chromium for Vercel serverless compatibility
     browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: { width: 1920, height: 1080 },
+      executablePath: await chromium.executablePath(),
       headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--disable-web-security',
-        '--disable-features=IsolateOrigins,site-per-process'
-      ]
     });
 
     const page = await browser.newPage();
