@@ -515,11 +515,39 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
       return data;
     });
 
-    // Deduplicate terms
+    // Helper function to check if a string is a URL
+    const isUrl = (str: string): boolean => {
+      return str.startsWith('http://') ||
+             str.startsWith('https://') ||
+             str.startsWith('www.') ||
+             str.includes('.com/') ||
+             str.includes('.pdf') ||
+             str.includes('.org/') ||
+             str.includes('.net/') ||
+             str.includes('.io/') ||
+             /^[a-z0-9-]+\.(com|org|net|io|co|edu|gov|pdf)\b/i.test(str);
+    };
+
+    // Deduplicate and filter terms
     const seenTerms = new Set<string>();
     const uniqueTerms = extractedData.terms.filter((t) => {
       const key = t.term.toLowerCase();
+
+      // Skip if already seen
       if (seenTerms.has(key)) return false;
+
+      // Skip URLs - they're not real keywords
+      if (isUrl(t.term)) {
+        console.log(`[Surfer Parser] Filtering out URL: ${t.term.substring(0, 50)}...`);
+        return false;
+      }
+
+      // Skip if term is too long (likely not a keyword)
+      if (t.term.length > 60) return false;
+
+      // Skip if term contains too many special characters
+      if (/[<>{}|\[\]\\]/.test(t.term)) return false;
+
       seenTerms.add(key);
       return true;
     }) as SurferTerm[];

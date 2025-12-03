@@ -15,8 +15,25 @@ import {
   LevelFormat,
   INumberingOptions,
   ExternalHyperlink,
+  VerticalAlign,
 } from 'docx';
 import type { AnalysisResult, Settings, FAQ, SchemaRecommendation } from '@/types';
+
+// Change types for annotations
+const ChangeTypes = {
+  NEW_SECTION: 'New Section Added',
+  RESTRUCTURED: 'Content Restructured',
+  KEYWORD_ADDED: 'Keyword Integration',
+  HEADING_OPTIMIZED: 'Heading Optimized',
+  CTA_ADDED: 'Call-to-Action Added',
+  READABILITY: 'Readability Improved',
+  SEO_ENHANCED: 'SEO Enhancement',
+  FAQ_ADDED: 'FAQ Added for Featured Snippets',
+  SCHEMA_ADDED: 'Schema Markup Added',
+  CONTENT_EXPANDED: 'Content Expanded',
+  REMOVED: 'Content Removed',
+  REWORDED: 'Reworded for Clarity',
+} as const;
 
 interface DocGeneratorOptions {
   analysisResult: AnalysisResult;
@@ -73,6 +90,145 @@ const numberingConfig: INumberingOptions = {
     },
   ],
 };
+
+// Helper to create a change annotation box (yellow callout)
+function createChangeAnnotation(changeType: string, explanation: string): Paragraph {
+  return new Paragraph({
+    spacing: { before: 100, after: 100 },
+    shading: { fill: 'FEF3C7', type: ShadingType.CLEAR }, // Light yellow background
+    border: {
+      left: { style: BorderStyle.SINGLE, size: 24, color: 'F59E0B' }, // Orange left border
+    },
+    indent: { left: 200, right: 200 },
+    children: [
+      new TextRun({ text: `\u270F\uFE0F ${changeType}: `, bold: true, size: 18, color: '92400E' }),
+      new TextRun({ text: explanation, size: 18, color: '78350F', italics: true }),
+    ],
+  });
+}
+
+// Helper to truncate text for table display
+function truncateText(text: string, maxLength: number): string {
+  if (!text) return 'Not set';
+  if (text.length <= maxLength) return text;
+  return text.substring(0, maxLength - 3) + '...';
+}
+
+// Create comparison table for current vs optimized meta elements
+function createComparisonTable(
+  crawledData: AnalysisResult['crawledData'],
+  optimizedContent: AnalysisResult['optimizedContent']
+): Table {
+  const headerShading = { type: ShadingType.CLEAR, fill: '1E40AF' }; // Dark blue header
+  const labelShading = { type: ShadingType.CLEAR, fill: 'F9CB9C' }; // Orange/peach for labels
+  const tableBorder = {
+    style: BorderStyle.SINGLE,
+    size: 1,
+    color: 'CCCCCC',
+  };
+  const cellBorders = {
+    top: tableBorder,
+    bottom: tableBorder,
+    left: tableBorder,
+    right: tableBorder,
+  };
+
+  // Helper to create header cell
+  const createHeaderCell = (text: string): TableCell =>
+    new TableCell({
+      children: [
+        new Paragraph({
+          children: [new TextRun({ text, bold: true, size: 20, color: 'FFFFFF' })],
+          alignment: AlignmentType.CENTER,
+        }),
+      ],
+      shading: headerShading,
+      borders: cellBorders,
+      verticalAlign: VerticalAlign.CENTER,
+    });
+
+  // Helper to create label cell (left column)
+  const createLabelCell = (text: string): TableCell =>
+    new TableCell({
+      children: [
+        new Paragraph({
+          children: [new TextRun({ text, bold: true, size: 20 })],
+        }),
+      ],
+      shading: labelShading,
+      borders: cellBorders,
+      verticalAlign: VerticalAlign.CENTER,
+      width: { size: 1800, type: WidthType.DXA },
+    });
+
+  // Helper to create content cell
+  const createContentCell = (text: string, width?: number): TableCell =>
+    new TableCell({
+      children: [
+        new Paragraph({
+          children: [new TextRun({ text, size: 18 })],
+        }),
+      ],
+      borders: cellBorders,
+      verticalAlign: VerticalAlign.CENTER,
+      width: width ? { size: width, type: WidthType.DXA } : undefined,
+    });
+
+  // Helper to create "why changed" cell with italic explanation
+  const createWhyCell = (text: string): TableCell =>
+    new TableCell({
+      children: [
+        new Paragraph({
+          children: [new TextRun({ text, size: 16, italics: true, color: '4B5563' })],
+        }),
+      ],
+      borders: cellBorders,
+      verticalAlign: VerticalAlign.CENTER,
+      width: { size: 2400, type: WidthType.DXA },
+    });
+
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    rows: [
+      // Header row
+      new TableRow({
+        children: [
+          createHeaderCell('Element'),
+          createHeaderCell('Current'),
+          createHeaderCell('Optimized'),
+          createHeaderCell('Why Changed'),
+        ],
+      }),
+      // Title Tag row
+      new TableRow({
+        children: [
+          createLabelCell('Title Tag'),
+          createContentCell(truncateText(crawledData.title, 50)),
+          createContentCell(truncateText(optimizedContent.metaTitle, 50)),
+          createWhyCell('Primary keyword in first 30 chars, optimal length'),
+        ],
+      }),
+      // Meta Description row
+      new TableRow({
+        children: [
+          createLabelCell('Meta Description'),
+          createContentCell(truncateText(crawledData.metaDescription, 60)),
+          createContentCell(truncateText(optimizedContent.metaDescription, 60)),
+          createWhyCell('Added CTA, included target keyword, compelling copy'),
+        ],
+      }),
+      // H1 row
+      new TableRow({
+        children: [
+          createLabelCell('H1'),
+          createContentCell(crawledData.h1[0] || 'Not set'),
+          createContentCell(optimizedContent.h1),
+          createWhyCell('Differentiated from title, natural keyword placement'),
+        ],
+      }),
+    ],
+  });
+}
 
 export async function generateDocument(options: DocGeneratorOptions): Promise<Buffer> {
   console.log('[doc-generator] Starting document generation...');
@@ -190,11 +346,11 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
             spacing: { after: 400 },
           }),
 
-          // Section Header
+          // Section Header - Comparison Table
           new Paragraph({
             children: [
               new TextRun({
-                text: 'Web Page - Meta Data',
+                text: 'Current vs Optimized Meta Elements',
                 bold: true,
                 size: 28,
                 font: 'Arial',
@@ -204,19 +360,43 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
             spacing: { before: 300, after: 200 },
           }),
 
-          // New Content Section
+          // Comparison Table
+          createComparisonTable(crawledData, optimizedContent),
+
+          // Optimized Content Section Header
           new Paragraph({
             children: [
               new TextRun({
-                text: 'NEW CONTENT',
+                text: 'OPTIMIZED CONTENT',
                 bold: true,
                 size: 28,
                 font: 'Arial',
                 color: '2563EB',
               }),
             ],
-            spacing: { before: 300, after: 200 },
+            spacing: { before: 400, after: 100 },
           }),
+
+          // Info box about annotations
+          new Paragraph({
+            shading: { fill: 'DBEAFE', type: ShadingType.CLEAR }, // Light blue background
+            spacing: { before: 0, after: 200 },
+            indent: { left: 200, right: 200 },
+            children: [
+              new TextRun({
+                text: '\u2139\uFE0F The content below has been optimized for SEO. Yellow callout boxes explain what was changed and why.',
+                italics: true,
+                size: 20,
+                color: '1E40AF',
+              }),
+            ],
+          }),
+
+          // Change annotation for H1
+          createChangeAnnotation(
+            ChangeTypes.HEADING_OPTIMIZED,
+            `H1 optimized with primary keyword placement. Differentiated from title tag to avoid duplication.`
+          ),
 
           // H1 as main heading
           new Paragraph({
@@ -229,8 +409,14 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
               }),
             ],
             heading: HeadingLevel.HEADING_1,
-            spacing: { before: 200, after: 200 },
+            spacing: { before: 100, after: 200 },
           }),
+
+          // General content optimization annotation
+          createChangeAnnotation(
+            ChangeTypes.SEO_ENHANCED,
+            'Content restructured with target keywords naturally integrated throughout. Improved readability and value for readers.'
+          ),
 
           // Full Content
           ...parseContentToParagraphs(optimizedContent.fullContent),
@@ -238,6 +424,11 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
           // FAQs Section (if any)
           ...(optimizedContent.faqs.length > 0
             ? [
+                // Annotation for FAQs
+                createChangeAnnotation(
+                  ChangeTypes.FAQ_ADDED,
+                  'FAQs added to target featured snippets and "People Also Ask" results. These can be marked up with FAQPage schema.'
+                ),
                 new Paragraph({
                   children: [
                     new TextRun({
@@ -248,7 +439,7 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
                     }),
                   ],
                   heading: HeadingLevel.HEADING_2,
-                  spacing: { before: 400, after: 200 },
+                  spacing: { before: 200, after: 200 },
                 }),
                 ...generateFAQParagraphs(optimizedContent.faqs),
               ]
@@ -257,6 +448,11 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
           // Schema Recommendations (if any)
           ...(settings.includeSchemaRecommendations && optimizedContent.schemaRecommendations.length > 0
             ? [
+                // Annotation for Schema
+                createChangeAnnotation(
+                  ChangeTypes.SCHEMA_ADDED,
+                  'Schema markup recommendations to enable rich snippets in search results. Add these to your page\'s HTML.'
+                ),
                 new Paragraph({
                   children: [
                     new TextRun({
@@ -267,7 +463,7 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
                     }),
                   ],
                   heading: HeadingLevel.HEADING_2,
-                  spacing: { before: 400, after: 200 },
+                  spacing: { before: 200, after: 200 },
                 }),
                 ...generateSchemaParagraphs(optimizedContent.schemaRecommendations),
               ]

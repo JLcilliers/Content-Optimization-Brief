@@ -96,22 +96,46 @@ export async function POST(request: NextRequest) {
   }
 }
 
+// Helper to check if a string looks like a URL
+function isUrl(str: string): boolean {
+  return str.startsWith('http://') ||
+         str.startsWith('https://') ||
+         str.startsWith('www.') ||
+         str.includes('.com/') ||
+         str.includes('.pdf') ||
+         str.includes('.org/') ||
+         str.includes('.net/') ||
+         str.includes('.io/') ||
+         /^[a-z0-9-]+\.(com|org|net|io|co|edu|gov|pdf)\b/i.test(str);
+}
+
+// Helper to filter out invalid keywords
+function isValidKeyword(term: string): boolean {
+  if (!term || term.length < 2 || term.length > 60) return false;
+  if (isUrl(term)) return false;
+  if (/[<>{}|\[\]\\]/.test(term)) return false;
+  return true;
+}
+
 // Convert SurferSEO report to KeywordData format for the main analyzer
 function convertToKeywordData(surferReport: SurferSEOReport): KeywordData {
   // Convert SurferSEO report to KeywordData format
   const primary: string[] = [];
   const secondary: string[] = [];
   const nlpTerms: string[] = [];
-  const questions: string[] = surferReport.questions;
+  const questions: string[] = surferReport.questions.filter(q => !isUrl(q));
   const longTail: string[] = [];
 
-  // Add target keyword as primary
-  if (surferReport.targetKeyword) {
+  // Add target keyword as primary (if valid)
+  if (surferReport.targetKeyword && isValidKeyword(surferReport.targetKeyword)) {
     primary.push(surferReport.targetKeyword);
   }
 
-  // Categorize keywords by importance
+  // Categorize keywords by importance, filtering out URLs
   surferReport.keywords.forEach(kw => {
+    // Skip invalid keywords (URLs, too long, etc.)
+    if (!isValidKeyword(kw.term)) return;
+
     if (kw.importance === 'high') {
       if (!primary.includes(kw.term)) {
         primary.push(kw.term);
@@ -128,9 +152,11 @@ function convertToKeywordData(surferReport: SurferSEOReport): KeywordData {
     }
   });
 
-  // Add NLP terms
+  // Add NLP terms (filtering out URLs)
   surferReport.nlpTerms.forEach(term => {
-    nlpTerms.push(term.term);
+    if (isValidKeyword(term.term)) {
+      nlpTerms.push(term.term);
+    }
   });
 
   // Combine all keywords
