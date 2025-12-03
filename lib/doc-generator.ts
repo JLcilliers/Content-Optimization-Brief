@@ -14,6 +14,7 @@ import {
   Packer,
   LevelFormat,
   INumberingOptions,
+  ExternalHyperlink,
 } from 'docx';
 import type { AnalysisResult, Settings, FAQ, SchemaRecommendation } from '@/types';
 
@@ -74,8 +75,10 @@ const numberingConfig: INumberingOptions = {
 };
 
 export async function generateDocument(options: DocGeneratorOptions): Promise<Buffer> {
+  console.log('[doc-generator] Starting document generation...');
   const { analysisResult, settings, clientName, pageName } = options;
   const { crawledData, optimizedContent, keywords } = analysisResult;
+  console.log('[doc-generator] Content length:', optimizedContent?.fullContent?.length || 0);
 
   const doc = new Document({
     numbering: numberingConfig,
@@ -282,7 +285,155 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
     ],
   });
 
-  return Buffer.from(await Packer.toBuffer(doc));
+  console.log('[doc-generator] Document structure created, starting Packer.toBuffer...');
+  const buffer = await Packer.toBuffer(doc);
+  console.log('[doc-generator] Buffer created, size:', buffer.length);
+  return Buffer.from(buffer);
+}
+
+// Type for inline elements that can be TextRun or ExternalHyperlink
+type InlineElement = TextRun | ExternalHyperlink;
+
+/**
+ * Clean up escaped markdown and normalize text
+ */
+function cleanMarkdownEscapes(text: string): string {
+  return text
+    .replace(/\\\*/g, '*')      // \* -> *
+    .replace(/\\\[/g, '[')      // \[ -> [
+    .replace(/\\\]/g, ']')      // \] -> ]
+    .replace(/\\\(/g, '(')      // \( -> (
+    .replace(/\\\)/g, ')')      // \) -> )
+    .replace(/\\"/g, '"')       // \" -> "
+    .replace(/\\_/g, '_');      // \_ -> _
+}
+
+/**
+ * Parse inline markdown formatting (bold, italic, links) into docx elements
+ */
+function parseInlineFormatting(text: string): InlineElement[] {
+  const elements: InlineElement[] = [];
+
+  // Clean escaped markdown first
+  let cleanedText = cleanMarkdownEscapes(text);
+
+  // Combined regex to match: **bold**, *italic*, [link](url), or plain text
+  // Order matters: **bold** before *italic* to handle properly
+  const inlinePattern = /(\*\*(.+?)\*\*|\*([^*]+)\*|\[([^\]]+)\]\(([^)]+)\))/g;
+
+  let lastIndex = 0;
+  let match;
+
+  while ((match = inlinePattern.exec(cleanedText)) !== null) {
+    // Add plain text before this match
+    if (match.index > lastIndex) {
+      const plainText = cleanedText.substring(lastIndex, match.index);
+      if (plainText) {
+        elements.push(
+          new TextRun({
+            text: plainText,
+            size: 24,
+            font: 'Arial',
+          })
+        );
+      }
+    }
+
+    const fullMatch = match[0];
+
+    // Bold: **text**
+    if (fullMatch.startsWith('**') && fullMatch.endsWith('**')) {
+      const boldContent = match[2];
+      // Check if bold content contains a link
+      const linkInBold = boldContent.match(/\[([^\]]+)\]\(([^)]+)\)/);
+      if (linkInBold) {
+        // Bold link
+        elements.push(
+          new ExternalHyperlink({
+            children: [
+              new TextRun({
+                text: linkInBold[1],
+                bold: true,
+                size: 24,
+                font: 'Arial',
+                color: '2563EB',
+                underline: { type: 'single' },
+              }),
+            ],
+            link: linkInBold[2],
+          })
+        );
+      } else {
+        elements.push(
+          new TextRun({
+            text: boldContent,
+            bold: true,
+            size: 24,
+            font: 'Arial',
+          })
+        );
+      }
+    }
+    // Italic: *text* (but not **)
+    else if (fullMatch.startsWith('*') && !fullMatch.startsWith('**') && fullMatch.endsWith('*')) {
+      elements.push(
+        new TextRun({
+          text: match[3],
+          italics: true,
+          size: 24,
+          font: 'Arial',
+        })
+      );
+    }
+    // Link: [text](url)
+    else if (fullMatch.startsWith('[')) {
+      const linkText = match[4];
+      const linkUrl = match[5];
+      elements.push(
+        new ExternalHyperlink({
+          children: [
+            new TextRun({
+              text: linkText,
+              size: 24,
+              font: 'Arial',
+              color: '2563EB',
+              underline: { type: 'single' },
+            }),
+          ],
+          link: linkUrl,
+        })
+      );
+    }
+
+    lastIndex = match.index + fullMatch.length;
+  }
+
+  // Add remaining plain text after last match
+  if (lastIndex < cleanedText.length) {
+    const remainingText = cleanedText.substring(lastIndex);
+    if (remainingText) {
+      elements.push(
+        new TextRun({
+          text: remainingText,
+          size: 24,
+          font: 'Arial',
+        })
+      );
+    }
+  }
+
+  // If no matches found, return the whole text as a single TextRun
+  if (elements.length === 0) {
+    elements.push(
+      new TextRun({
+        text: cleanedText,
+        size: 24,
+        font: 'Arial',
+      })
+    );
+  }
+
+  return elements;
 }
 
 function parseContentToParagraphs(content: string): Paragraph[] {
@@ -297,13 +448,34 @@ function parseContentToParagraphs(content: string): Paragraph[] {
       continue;
     }
 
-    // H2 heading (##)
-    if (trimmedLine.startsWith('## ')) {
+    // H1 heading (#)
+    if (trimmedLine.startsWith('# ') && !trimmedLine.startsWith('## ')) {
+      const headingText = trimmedLine.replace('# ', '');
       paragraphs.push(
         new Paragraph({
           children: [
             new TextRun({
-              text: trimmedLine.replace('## ', ''),
+              text: cleanMarkdownEscapes(headingText),
+              bold: true,
+              size: 32,
+              font: 'Arial',
+            }),
+          ],
+          heading: HeadingLevel.HEADING_1,
+          spacing: { before: 400, after: 200 },
+        })
+      );
+      continue;
+    }
+
+    // H2 heading (##)
+    if (trimmedLine.startsWith('## ') && !trimmedLine.startsWith('### ')) {
+      const headingText = trimmedLine.replace('## ', '');
+      paragraphs.push(
+        new Paragraph({
+          children: [
+            new TextRun({
+              text: cleanMarkdownEscapes(headingText),
               bold: true,
               size: 28,
               font: 'Arial',
@@ -318,11 +490,12 @@ function parseContentToParagraphs(content: string): Paragraph[] {
 
     // H3 heading (###)
     if (trimmedLine.startsWith('### ')) {
+      const headingText = trimmedLine.replace('### ', '');
       paragraphs.push(
         new Paragraph({
           children: [
             new TextRun({
-              text: trimmedLine.replace('### ', ''),
+              text: cleanMarkdownEscapes(headingText),
               bold: true,
               size: 24,
               font: 'Arial',
@@ -335,93 +508,36 @@ function parseContentToParagraphs(content: string): Paragraph[] {
       continue;
     }
 
-    // Bullet point - use Word's native numbering
+    // Bullet point - use Word's native numbering with inline formatting
     if (trimmedLine.startsWith('- ') || trimmedLine.startsWith('* ')) {
+      const bulletContent = trimmedLine.substring(2);
       paragraphs.push(
         new Paragraph({
           numbering: { reference: 'bullet-list', level: 0 },
-          children: [
-            new TextRun({
-              text: trimmedLine.substring(2),
-              size: 24,
-              font: 'Arial',
-            }),
-          ],
+          children: parseInlineFormatting(bulletContent),
           spacing: { after: 80 },
         })
       );
       continue;
     }
 
-    // Numbered list - use Word's native numbering
+    // Numbered list - use Word's native numbering with inline formatting
     const numberMatch = trimmedLine.match(/^(\d+)\.\s(.+)/);
     if (numberMatch) {
       paragraphs.push(
         new Paragraph({
           numbering: { reference: 'numbered-list', level: 0 },
-          children: [
-            new TextRun({
-              text: numberMatch[2],
-              size: 24,
-              font: 'Arial',
-            }),
-          ],
+          children: parseInlineFormatting(numberMatch[2]),
           spacing: { after: 80 },
         })
       );
       continue;
     }
 
-    // Bold text handling (**text**)
-    const runs: TextRun[] = [];
-    const boldRegex = /\*\*([^*]+)\*\*/g;
-    let lastIndex = 0;
-    let match;
-
-    while ((match = boldRegex.exec(trimmedLine)) !== null) {
-      // Add text before bold
-      if (match.index > lastIndex) {
-        runs.push(
-          new TextRun({
-            text: trimmedLine.substring(lastIndex, match.index),
-            size: 24,
-            font: 'Arial',
-          })
-        );
-      }
-      // Add bold text
-      runs.push(
-        new TextRun({
-          text: match[1],
-          bold: true,
-          size: 24,
-          font: 'Arial',
-        })
-      );
-      lastIndex = match.index + match[0].length;
-    }
-
-    // Add remaining text
-    if (lastIndex < trimmedLine.length) {
-      runs.push(
-        new TextRun({
-          text: trimmedLine.substring(lastIndex),
-          size: 24,
-          font: 'Arial',
-        })
-      );
-    }
-
-    // Regular paragraph
+    // Regular paragraph with inline formatting
     paragraphs.push(
       new Paragraph({
-        children: runs.length > 0 ? runs : [
-          new TextRun({
-            text: trimmedLine,
-            size: 24,
-            font: 'Arial',
-          }),
-        ],
+        children: parseInlineFormatting(trimmedLine),
         spacing: { after: 150 },
       })
     );

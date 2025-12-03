@@ -136,12 +136,19 @@ export default function Home() {
     if (!results) return
 
     setIsGeneratingDoc(true)
+
+    // Create abort controller with 90 second timeout
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 90000)
+
     try {
       // Extract client name and page name from URL
       const domain = extractDomain(analyzedUrl)
       const clientName = settings.brandName || domain.split('.')[0] || 'Client'
       const pathParts = analyzedUrl.split('/').filter(Boolean)
       const pageName = pathParts[pathParts.length - 1] || 'Homepage'
+
+      console.log('[handleDownload] Starting document generation request...')
 
       const response = await fetch('/api/generate-doc', {
         method: 'POST',
@@ -152,14 +159,22 @@ export default function Home() {
           clientName,
           pageName,
         }),
+        signal: controller.signal,
       })
 
+      clearTimeout(timeoutId)
+
+      console.log('[handleDownload] Response received, status:', response.status)
+
       if (!response.ok) {
+        const errorText = await response.text()
+        console.error('[handleDownload] Error response:', errorText)
         throw new Error('Failed to generate document')
       }
 
       // Download the file
       const blob = await response.blob()
+      console.log('[handleDownload] Blob received, size:', blob.size)
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
@@ -169,9 +184,15 @@ export default function Home() {
       window.URL.revokeObjectURL(url)
       document.body.removeChild(a)
 
-    } catch (err) {
-      console.error('Download error:', err)
-      alert('Failed to generate document. Please try again.')
+    } catch (err: unknown) {
+      clearTimeout(timeoutId)
+      if (err instanceof Error && err.name === 'AbortError') {
+        console.error('[handleDownload] Request timed out after 90 seconds')
+        alert('Document generation timed out. The content may be too large. Please try again.')
+      } else {
+        console.error('Download error:', err)
+        alert('Failed to generate document. Please try again.')
+      }
     } finally {
       setIsGeneratingDoc(false)
     }

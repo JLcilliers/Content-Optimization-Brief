@@ -4,6 +4,9 @@ import { analyzeSEO } from '@/lib/seo-analyzer';
 import { optimizeContent } from '@/lib/content-optimizer';
 import type { AnalyzeRequest, AnalysisResult, KeywordData } from '@/types';
 
+// Extend timeout for Vercel Pro (Claude API calls can take 30-60+ seconds)
+export const maxDuration = 120;
+
 export async function POST(request: NextRequest) {
   try {
     const body: AnalyzeRequest = await request.json();

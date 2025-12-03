@@ -2,10 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 import { generateDocument } from '@/lib/doc-generator';
 import type { DocumentGenerationRequest } from '@/types';
 
+// Extend timeout for Vercel (Pro plan: up to 300s, Hobby: 10s max)
+export const maxDuration = 60;
+
 export async function POST(request: NextRequest) {
+  console.log('[generate-doc] Starting request...');
+
   try {
     const body: DocumentGenerationRequest = await request.json();
     const { analysisResult, settings, clientName, pageName } = body;
+
+    console.log('[generate-doc] Parsed body, content length:',
+      analysisResult?.optimizedContent?.fullContent?.length || 0);
 
     if (!analysisResult) {
       return NextResponse.json(
@@ -14,6 +22,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    console.log('[generate-doc] Starting document generation...');
+
     // Generate the Word document
     const docBuffer = await generateDocument({
       analysisResult,
@@ -21,6 +31,8 @@ export async function POST(request: NextRequest) {
       clientName: clientName || 'Client',
       pageName: pageName || 'Page',
     });
+
+    console.log('[generate-doc] Document generated, buffer size:', docBuffer.length);
 
     // Return the document as a downloadable file
     const filename = `${clientName || 'SEO'}_${pageName || 'Content'}_Improvement.docx`
