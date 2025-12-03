@@ -1,16 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Firecrawl from '@mendable/firecrawl-js';
-import type { SurferSEOReport, SurferKeyword, SurferNLPTerm, KeywordData } from '@/types';
+import { parseSurferAuditReport } from '@/lib/surfer-parser';
+import type { SurferSEOReport, KeywordData } from '@/types';
 
-const firecrawlApiKey = process.env.FIRECRAWL_API_KEY;
-
-// Firecrawl v2 API returns document directly
-interface FirecrawlDocument {
-  markdown?: string;
-  html?: string;
-  rawHtml?: string;
-  metadata?: Record<string, unknown>;
-}
+// Extended timeout for Puppeteer browser automation
+export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
   try {
@@ -33,43 +26,62 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!firecrawlApiKey) {
+    console.log('[Surfer API] Starting Puppeteer-based parsing for:', surferUrl);
+
+    // Use Puppeteer-based parser for better extraction
+    const result = await parseSurferAuditReport(surferUrl);
+
+    if (!result.success) {
       return NextResponse.json(
-        { success: false, error: 'Firecrawl API key is not configured' },
+        { success: false, error: result.error || 'Failed to parse SurferSEO report' },
         { status: 500 }
       );
     }
 
-    const app = new Firecrawl({ apiKey: firecrawlApiKey });
-
-    // Scrape the SurferSEO page using Firecrawl SDK v2 API
-    // v2 API uses 'scrape' method and returns document directly
-    let scrapeResult: FirecrawlDocument;
-    try {
-      scrapeResult = await app.scrape(surferUrl, {
-        formats: ['markdown', 'html'],
-      }) as FirecrawlDocument;
-    } catch (scrapeError) {
-      const errorMsg = scrapeError instanceof Error ? scrapeError.message : 'Unknown scrape error';
-      return NextResponse.json(
-        { success: false, error: `Failed to access SurferSEO report: ${errorMsg}. Make sure the report is publicly accessible or shared.` },
-        { status: 500 }
-      );
-    }
-
-    const markdown = scrapeResult.markdown || '';
-    const html = scrapeResult.html || '';
-
-    // Parse the SurferSEO report content
-    const surferData = parseSurferContent(markdown, html);
+    // Convert parsed data to SurferSEOReport format
+    const surferReport: SurferSEOReport = {
+      url: result.url,
+      targetKeyword: result.mainKeyword,
+      contentScore: result.contentScore || 0,
+      wordCountTarget: {
+        min: result.wordCount ? Math.round(result.wordCount * 0.8) : 1500,
+        max: result.wordCount ? Math.round(result.wordCount * 1.2) : 3000,
+        recommended: result.wordCount || 2000,
+      },
+      headings: {
+        h2Count: { min: 3, max: 10, recommended: 6 },
+        h3Count: { min: 2, max: 15, recommended: 8 },
+      },
+      keywords: result.terms.map((term, index) => ({
+        term: term.term,
+        importance: index < 5 ? 'high' as const : index < 15 ? 'medium' as const : 'low' as const,
+        usageTarget: {
+          min: term.recommendedMin || 1,
+          max: term.recommendedMax || 5,
+          recommended: term.recommendedMin && term.recommendedMax
+            ? Math.round((term.recommendedMin + term.recommendedMax) / 2)
+            : 2,
+        },
+      })),
+      nlpTerms: result.terms.slice(0, 20).map((term, index) => ({
+        term: term.term,
+        relevance: Math.max(0.3, 1 - (index * 0.03)),
+        usageTarget: term.recommendedMax || Math.max(1, 3 - Math.floor(index / 5)),
+      })),
+      questions: result.questions,
+      competitors: [],
+      structureRecommendations: result.headings,
+    };
 
     // Convert to KeywordData format for the main analyzer
-    const keywords = convertToKeywordData(surferData);
+    const keywords = convertToKeywordData(surferReport);
+
+    console.log(`[Surfer API] Extracted ${result.terms.length} terms, ${result.questions.length} questions`);
 
     return NextResponse.json({
       success: true,
       data: {
-        surferReport: surferData,
+        surferReport,
         keywords,
       },
     });
@@ -84,178 +96,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
-function parseSurferContent(markdown: string, html: string): SurferSEOReport {
-  // Extract data from the SurferSEO report
-  // This parser handles common SurferSEO content editor report formats
-
-  const report: SurferSEOReport = {
-    url: '',
-    targetKeyword: '',
-    contentScore: 0,
-    wordCountTarget: { min: 1500, max: 3000, recommended: 2000 },
-    headings: {
-      h2Count: { min: 3, max: 10, recommended: 6 },
-      h3Count: { min: 2, max: 15, recommended: 8 },
-    },
-    keywords: [],
-    nlpTerms: [],
-    questions: [],
-    competitors: [],
-    structureRecommendations: [],
-  };
-
-  // Extract target keyword (usually prominently displayed)
-  const keywordMatch = markdown.match(/(?:target keyword|main keyword|primary keyword)[:\s]*([^\n]+)/i)
-    || markdown.match(/(?:keyword|topic)[:\s]*["']?([^"'\n]+)["']?/i);
-  if (keywordMatch) {
-    report.targetKeyword = keywordMatch[1].trim();
-  }
-
-  // Extract content score
-  const scoreMatch = markdown.match(/(?:content score|score)[:\s]*(\d+)/i);
-  if (scoreMatch) {
-    report.contentScore = parseInt(scoreMatch[1], 10);
-  }
-
-  // Extract word count recommendations
-  const wordCountMatch = markdown.match(/(?:word count|words)[:\s]*(\d+)\s*[-–]\s*(\d+)/i)
-    || markdown.match(/(\d+)\s*[-–]\s*(\d+)\s*words/i);
-  if (wordCountMatch) {
-    report.wordCountTarget.min = parseInt(wordCountMatch[1], 10);
-    report.wordCountTarget.max = parseInt(wordCountMatch[2], 10);
-    report.wordCountTarget.recommended = Math.round((report.wordCountTarget.min + report.wordCountTarget.max) / 2);
-  }
-
-  // Extract keywords from various sections
-  const keywordPatterns = [
-    /(?:important terms|key terms|keywords to use|terms to include)[:\s]*\n([\s\S]*?)(?=\n\n|\n#|$)/gi,
-    /(?:use these|include these)[:\s]*\n([\s\S]*?)(?=\n\n|\n#|$)/gi,
-  ];
-
-  const keywordTerms: Set<string> = new Set();
-
-  for (const pattern of keywordPatterns) {
-    const matches = markdown.matchAll(pattern);
-    for (const match of matches) {
-      const terms = match[1].split(/[\n,;]/).map(t => t.trim()).filter(t => t.length > 0 && t.length < 50);
-      terms.forEach(t => {
-        // Clean up bullet points and numbers
-        const cleaned = t.replace(/^[-•*\d.)\]]+\s*/, '').trim();
-        if (cleaned) keywordTerms.add(cleaned);
-      });
-    }
-  }
-
-  // Also look for terms in lists
-  const listItemPattern = /[-•*]\s*([^:\n]+?)(?:\s*[-–:]\s*(?:high|medium|low|important|use \d+|mention))?$/gim;
-  const listMatches = markdown.matchAll(listItemPattern);
-  for (const match of listMatches) {
-    const term = match[1].trim();
-    if (term.length > 2 && term.length < 50 && !term.includes('http')) {
-      keywordTerms.add(term);
-    }
-  }
-
-  // Convert to SurferKeyword format
-  let index = 0;
-  keywordTerms.forEach(term => {
-    const importance = index < 5 ? 'high' : index < 15 ? 'medium' : 'low';
-    report.keywords.push({
-      term,
-      importance,
-      usageTarget: {
-        min: importance === 'high' ? 3 : importance === 'medium' ? 2 : 1,
-        max: importance === 'high' ? 10 : importance === 'medium' ? 6 : 4,
-        recommended: importance === 'high' ? 5 : importance === 'medium' ? 3 : 2,
-      },
-    });
-    index++;
-  });
-
-  // Extract NLP terms (often labeled as NLP entities or semantic terms)
-  const nlpPattern = /(?:nlp terms|nlp entities|semantic terms|related terms)[:\s]*\n([\s\S]*?)(?=\n\n|\n#|$)/gi;
-  const nlpMatches = markdown.matchAll(nlpPattern);
-  for (const match of nlpMatches) {
-    const terms = match[1].split(/[\n,;]/).map(t => t.trim()).filter(t => t.length > 0);
-    terms.forEach((t, i) => {
-      const cleaned = t.replace(/^[-•*\d.)\]]+\s*/, '').trim();
-      if (cleaned && cleaned.length < 50) {
-        report.nlpTerms.push({
-          term: cleaned,
-          relevance: Math.max(0.3, 1 - (i * 0.05)),
-          usageTarget: Math.max(1, 3 - Math.floor(i / 5)),
-        });
-      }
-    });
-  }
-
-  // Extract questions (People Also Ask, FAQs)
-  const questionPatterns = [
-    /(?:questions|people also ask|faqs?)[:\s]*\n([\s\S]*?)(?=\n\n|\n#|$)/gi,
-    /\?[^\n]*\n/g,
-  ];
-
-  const questions: Set<string> = new Set();
-
-  // Look for question sections
-  const questionSectionMatch = markdown.match(/(?:questions|people also ask)[:\s]*\n([\s\S]*?)(?=\n\n|\n#|$)/i);
-  if (questionSectionMatch) {
-    const qLines = questionSectionMatch[1].split('\n');
-    qLines.forEach(line => {
-      const cleaned = line.replace(/^[-•*\d.)\]]+\s*/, '').trim();
-      if (cleaned.includes('?') || cleaned.toLowerCase().startsWith('how') ||
-          cleaned.toLowerCase().startsWith('what') || cleaned.toLowerCase().startsWith('why') ||
-          cleaned.toLowerCase().startsWith('when') || cleaned.toLowerCase().startsWith('where')) {
-        questions.add(cleaned.endsWith('?') ? cleaned : cleaned + '?');
-      }
-    });
-  }
-
-  // Find standalone questions
-  const standaloneQuestions = markdown.match(/(?:^|\n)([^?\n]*\?)\s*(?:\n|$)/g);
-  if (standaloneQuestions) {
-    standaloneQuestions.forEach(q => {
-      const cleaned = q.trim();
-      if (cleaned.length > 10 && cleaned.length < 200) {
-        questions.add(cleaned);
-      }
-    });
-  }
-
-  report.questions = Array.from(questions).slice(0, 10);
-
-  // Extract structure recommendations
-  const structurePatterns = [
-    /(?:structure|outline|recommended headings)[:\s]*\n([\s\S]*?)(?=\n\n|\n#|$)/gi,
-    /(?:h2|heading)[:\s]*([^\n]+)/gi,
-  ];
-
-  for (const pattern of structurePatterns) {
-    const matches = markdown.matchAll(pattern);
-    for (const match of matches) {
-      const rec = match[1].trim();
-      if (rec && rec.length < 100) {
-        report.structureRecommendations.push(rec);
-      }
-    }
-  }
-
-  // If we didn't find much, try to extract from HTML
-  if (report.keywords.length === 0 && html) {
-    // Try to find keyword elements in HTML
-    const htmlKeywordMatches = html.matchAll(/data-keyword="([^"]+)"/g);
-    for (const match of htmlKeywordMatches) {
-      report.keywords.push({
-        term: match[1],
-        importance: 'medium',
-        usageTarget: { min: 1, max: 5, recommended: 2 },
-      });
-    }
-  }
-
-  return report;
-}
-
+// Convert SurferSEO report to KeywordData format for the main analyzer
 function convertToKeywordData(surferReport: SurferSEOReport): KeywordData {
   // Convert SurferSEO report to KeywordData format
   const primary: string[] = [];
