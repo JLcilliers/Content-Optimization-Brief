@@ -3,17 +3,29 @@ import type { CrawledData, SchemaMarkup, ImageData } from '@/types';
 
 const firecrawlApiKey = process.env.FIRECRAWL_API_KEY;
 
-interface FirecrawlResult {
+interface FirecrawlMetadata {
+  title?: string;
+  description?: string;
+  ogTitle?: string;
+  ogDescription?: string;
+  canonical?: string;
+  [key: string]: unknown;
+}
+
+interface FirecrawlData {
   markdown?: string;
   html?: string;
-  metadata?: {
-    title?: string;
-    description?: string;
-    ogTitle?: string;
-    ogDescription?: string;
-    canonical?: string;
-    [key: string]: unknown;
-  };
+  metadata?: FirecrawlMetadata;
+}
+
+interface FirecrawlResponse {
+  success: boolean;
+  error?: string;
+  data?: FirecrawlData;
+  // Legacy format (some versions return data at root)
+  markdown?: string;
+  html?: string;
+  metadata?: FirecrawlMetadata;
 }
 
 export async function crawlPage(url: string): Promise<CrawledData> {
@@ -27,15 +39,17 @@ export async function crawlPage(url: string): Promise<CrawledData> {
     // Use type assertion to handle API version differences
     const scrapeResult = await (app as unknown as { scrapeUrl: (url: string, options: { formats: string[] }) => Promise<unknown> }).scrapeUrl(url, {
       formats: ['markdown', 'html'],
-    }) as { success: boolean; error?: string } & FirecrawlResult;
+    }) as FirecrawlResponse;
 
     if (!scrapeResult.success) {
       throw new Error(scrapeResult.error || 'Failed to crawl page');
     }
 
-    const html = scrapeResult.html || '';
-    const markdown = scrapeResult.markdown || '';
-    const metadata = scrapeResult.metadata || {};
+    // Handle both v4+ format (data nested) and legacy format (data at root)
+    const responseData = scrapeResult.data || scrapeResult;
+    const html = responseData.html || '';
+    const markdown = responseData.markdown || '';
+    const metadata = responseData.metadata || {};
 
     // Extract data from HTML
     const extractedData = extractFromHtml(html);

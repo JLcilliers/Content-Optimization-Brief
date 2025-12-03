@@ -146,6 +146,56 @@ export interface AnalyzeRequest {
   settings: Settings;
 }
 
+// SurferSEO Report Types
+export interface SurferSEOReport {
+  url: string;
+  targetKeyword: string;
+  contentScore: number;
+  wordCountTarget: {
+    min: number;
+    max: number;
+    recommended: number;
+  };
+  headings: {
+    h2Count: { min: number; max: number; recommended: number };
+    h3Count: { min: number; max: number; recommended: number };
+  };
+  keywords: SurferKeyword[];
+  nlpTerms: SurferNLPTerm[];
+  questions: string[];
+  competitors: SurferCompetitor[];
+  structureRecommendations: string[];
+}
+
+export interface SurferKeyword {
+  term: string;
+  importance: 'high' | 'medium' | 'low';
+  usageTarget: {
+    min: number;
+    max: number;
+    recommended: number;
+  };
+  currentUsage?: number;
+}
+
+export interface SurferNLPTerm {
+  term: string;
+  relevance: number;
+  usageTarget: number;
+  currentUsage?: number;
+}
+
+export interface SurferCompetitor {
+  url: string;
+  title: string;
+  wordCount: number;
+  contentScore: number;
+}
+
+export interface SurferAnalyzeRequest {
+  surferUrl: string;
+}
+
 // Error messages for user-facing errors
 export const ErrorMessages = {
   INVALID_URL: "Please enter a valid URL starting with http:// or https://",

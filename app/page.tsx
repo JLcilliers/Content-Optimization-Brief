@@ -4,10 +4,11 @@ import { useState, useCallback } from "react"
 import { Header } from "@/components/header"
 import { UrlInput } from "@/components/url-input"
 import { KeywordUpload } from "@/components/keyword-upload"
+import { SurferInput } from "@/components/surfer-input"
 import { AnalysisProgress } from "@/components/analysis-progress"
 import { ResultsPreview } from "@/components/results-preview"
 import { SettingsPanel } from "@/components/settings-panel"
-import type { AnalysisResult, KeywordData, Settings } from "@/types"
+import type { AnalysisResult, KeywordData, Settings, SurferSEOReport } from "@/types"
 import { extractDomain } from "@/lib/utils"
 
 interface ProgressStep {
@@ -37,6 +38,7 @@ export default function Home() {
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [isGeneratingDoc, setIsGeneratingDoc] = useState(false)
   const [keywords, setKeywords] = useState<KeywordData | null>(null)
+  const [surferReport, setSurferReport] = useState<SurferSEOReport | null>(null)
   const [settings, setSettings] = useState<Settings>(defaultSettings)
   const [results, setResults] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState("")
@@ -179,6 +181,24 @@ export default function Home() {
     setKeywords(loadedKeywords)
   }
 
+  const handleSurferDataLoaded = (loadedKeywords: KeywordData, loadedSurferReport: SurferSEOReport) => {
+    // Merge with existing keywords if any
+    if (keywords) {
+      const mergedKeywords: KeywordData = {
+        primary: [...new Set([...keywords.primary, ...loadedKeywords.primary])],
+        secondary: [...new Set([...keywords.secondary, ...loadedKeywords.secondary])],
+        nlpTerms: [...new Set([...keywords.nlpTerms, ...loadedKeywords.nlpTerms])],
+        questions: [...new Set([...keywords.questions, ...loadedKeywords.questions])],
+        longTail: [...new Set([...keywords.longTail, ...loadedKeywords.longTail])],
+        all: [...new Set([...keywords.all, ...loadedKeywords.all])],
+      }
+      setKeywords(mergedKeywords)
+    } else {
+      setKeywords(loadedKeywords)
+    }
+    setSurferReport(loadedSurferReport)
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <Header />
@@ -189,6 +209,12 @@ export default function Home() {
           <UrlInput
             onAnalyze={handleAnalyze}
             isAnalyzing={isAnalyzing}
+            disabled={isAnalyzing}
+          />
+
+          {/* SurferSEO Import */}
+          <SurferInput
+            onDataLoaded={handleSurferDataLoaded}
             disabled={isAnalyzing}
           />
 
