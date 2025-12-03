@@ -1,4 +1,4 @@
-import FirecrawlApp from '@mendable/firecrawl-js';
+import Firecrawl from '@mendable/firecrawl-js';
 import type { CrawledData, SchemaMarkup, ImageData } from '@/types';
 
 const firecrawlApiKey = process.env.FIRECRAWL_API_KEY;
@@ -9,22 +9,15 @@ interface FirecrawlMetadata {
   ogTitle?: string;
   ogDescription?: string;
   canonical?: string;
+  sourceURL?: string;
   [key: string]: unknown;
 }
 
-interface FirecrawlData {
+// Response structure for Firecrawl SDK v4.x (v2 API)
+interface FirecrawlDocument {
   markdown?: string;
   html?: string;
-  metadata?: FirecrawlMetadata;
-}
-
-interface FirecrawlResponse {
-  success: boolean;
-  error?: string;
-  data?: FirecrawlData;
-  // Legacy format (some versions return data at root)
-  markdown?: string;
-  html?: string;
+  rawHtml?: string;
   metadata?: FirecrawlMetadata;
 }
 
@@ -33,23 +26,19 @@ export async function crawlPage(url: string): Promise<CrawledData> {
     throw new Error('FIRECRAWL_API_KEY is not configured');
   }
 
-  const app = new FirecrawlApp({ apiKey: firecrawlApiKey });
+  const app = new Firecrawl({ apiKey: firecrawlApiKey });
 
   try {
-    // Use type assertion to handle API version differences
-    const scrapeResult = await (app as unknown as { scrapeUrl: (url: string, options: { formats: string[] }) => Promise<unknown> }).scrapeUrl(url, {
+    // Firecrawl SDK v4.x uses 'scrape' method (v2 API)
+    // The v2 API returns the document directly (not wrapped in success/data)
+    const scrapeResult = await app.scrape(url, {
       formats: ['markdown', 'html'],
-    }) as FirecrawlResponse;
+    }) as FirecrawlDocument;
 
-    if (!scrapeResult.success) {
-      throw new Error(scrapeResult.error || 'Failed to crawl page');
-    }
-
-    // Handle both v4+ format (data nested) and legacy format (data at root)
-    const responseData = scrapeResult.data || scrapeResult;
-    const html = responseData.html || '';
-    const markdown = responseData.markdown || '';
-    const metadata = responseData.metadata || {};
+    // v2 API throws on error, so if we get here it was successful
+    const html = scrapeResult.html || '';
+    const markdown = scrapeResult.markdown || '';
+    const metadata = scrapeResult.metadata || {};
 
     // Extract data from HTML
     const extractedData = extractFromHtml(html);

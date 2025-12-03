@@ -1,19 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server';
-import FirecrawlApp from '@mendable/firecrawl-js';
+import Firecrawl from '@mendable/firecrawl-js';
 import type { SurferSEOReport, SurferKeyword, SurferNLPTerm, KeywordData } from '@/types';
 
 const firecrawlApiKey = process.env.FIRECRAWL_API_KEY;
 
-interface FirecrawlResponse {
-  success: boolean;
-  error?: string;
-  data?: {
-    markdown?: string;
-    html?: string;
-    metadata?: Record<string, unknown>;
-  };
+// Firecrawl v2 API returns document directly
+interface FirecrawlDocument {
   markdown?: string;
   html?: string;
+  rawHtml?: string;
+  metadata?: Record<string, unknown>;
 }
 
 export async function POST(request: NextRequest) {
@@ -44,26 +40,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const app = new FirecrawlApp({ apiKey: firecrawlApiKey });
+    const app = new Firecrawl({ apiKey: firecrawlApiKey });
 
-    // Scrape the SurferSEO page
-    const scrapeResult = await (app as unknown as {
-      scrapeUrl: (url: string, options: { formats: string[] }) => Promise<unknown>
-    }).scrapeUrl(surferUrl, {
-      formats: ['markdown', 'html'],
-    }) as FirecrawlResponse;
-
-    if (!scrapeResult.success) {
+    // Scrape the SurferSEO page using Firecrawl SDK v2 API
+    // v2 API uses 'scrape' method and returns document directly
+    let scrapeResult: FirecrawlDocument;
+    try {
+      scrapeResult = await app.scrape(surferUrl, {
+        formats: ['markdown', 'html'],
+      }) as FirecrawlDocument;
+    } catch (scrapeError) {
+      const errorMsg = scrapeError instanceof Error ? scrapeError.message : 'Unknown scrape error';
       return NextResponse.json(
-        { success: false, error: scrapeResult.error || 'Failed to access SurferSEO report. Make sure the report is publicly accessible or shared.' },
+        { success: false, error: `Failed to access SurferSEO report: ${errorMsg}. Make sure the report is publicly accessible or shared.` },
         { status: 500 }
       );
     }
 
-    // Handle both API response formats
-    const responseData = scrapeResult.data || scrapeResult;
-    const markdown = responseData.markdown || '';
-    const html = responseData.html || '';
+    const markdown = scrapeResult.markdown || '';
+    const html = scrapeResult.html || '';
 
     // Parse the SurferSEO report content
     const surferData = parseSurferContent(markdown, html);
