@@ -19,21 +19,31 @@ import {
 } from 'docx';
 import type { AnalysisResult, Settings, FAQ, SchemaRecommendation } from '@/types';
 
-// Change types for annotations
-const ChangeTypes = {
-  NEW_SECTION: 'New Section Added',
-  RESTRUCTURED: 'Content Restructured',
-  KEYWORD_ADDED: 'Keyword Integration',
-  HEADING_OPTIMIZED: 'Heading Optimized',
-  CTA_ADDED: 'Call-to-Action Added',
-  READABILITY: 'Readability Improved',
-  SEO_ENHANCED: 'SEO Enhancement',
-  FAQ_ADDED: 'FAQ Added for Featured Snippets',
-  SCHEMA_ADDED: 'Schema Markup Added',
-  CONTENT_EXPANDED: 'Content Expanded',
-  REMOVED: 'Content Removed',
-  REWORDED: 'Reworded for Clarity',
-} as const;
+// Font constant for easy updates
+const FONT = 'Poppins';
+
+// Font sizes in half-points (multiply by 2 for pt size)
+const FONT_SIZES = {
+  TITLE: 56,      // 28pt
+  HEADING1: 44,   // 22pt
+  HEADING2: 32,   // 16pt
+  HEADING3: 28,   // 14pt
+  BODY: 24,       // 12pt
+  SMALL: 20,      // 10pt
+  CODE: 18,       // 9pt
+};
+
+// Colors
+const COLORS = {
+  PRIMARY: '1e3a5f',
+  SECONDARY: '2c5282',
+  TERTIARY: '3c6997',
+  LINK: '2563EB',
+  TEXT: '1a1a1a',
+  TEXT_LIGHT: '374151',
+  GREEN_HIGHLIGHT: 'C6EFCE',  // Light green for highlighting changes
+  GREEN_BORDER: '22C55E',
+};
 
 interface DocGeneratorOptions {
   analysisResult: AnalysisResult;
@@ -57,6 +67,7 @@ const numberingConfig: INumberingOptions = {
             paragraph: {
               indent: { left: 720, hanging: 360 },
             },
+            run: { font: FONT },
           },
         },
         {
@@ -68,6 +79,7 @@ const numberingConfig: INumberingOptions = {
             paragraph: {
               indent: { left: 1440, hanging: 360 },
             },
+            run: { font: FONT },
           },
         },
       ],
@@ -84,6 +96,7 @@ const numberingConfig: INumberingOptions = {
             paragraph: {
               indent: { left: 720, hanging: 360 },
             },
+            run: { font: FONT },
           },
         },
       ],
@@ -91,19 +104,83 @@ const numberingConfig: INumberingOptions = {
   ],
 };
 
-// Helper to create a change annotation box (yellow callout)
-function createChangeAnnotation(changeType: string, explanation: string): Paragraph {
+// Helper to create text with green highlight for new/changed content
+function createHighlightedTextRun(
+  text: string,
+  options: {
+    isNew?: boolean;
+    bold?: boolean;
+    italics?: boolean;
+    size?: number;
+    color?: string;
+  } = {}
+): TextRun {
+  return new TextRun({
+    text,
+    font: FONT,
+    size: options.size || FONT_SIZES.BODY,
+    bold: options.bold,
+    italics: options.italics,
+    color: options.color,
+    // Use shading for green highlight (more subtle than highlight property)
+    shading: options.isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+  });
+}
+
+// Helper to create a paragraph with optional green highlighting
+function createHighlightedParagraph(
+  text: string,
+  isNew: boolean = false,
+  options: { bold?: boolean; italics?: boolean } = {}
+): Paragraph {
   return new Paragraph({
-    spacing: { before: 100, after: 100 },
-    shading: { fill: 'FEF3C7', type: ShadingType.CLEAR }, // Light yellow background
-    border: {
-      left: { style: BorderStyle.SINGLE, size: 24, color: 'F59E0B' }, // Orange left border
-    },
-    indent: { left: 200, right: 200 },
     children: [
-      new TextRun({ text: `\u270F\uFE0F ${changeType}: `, bold: true, size: 18, color: '92400E' }),
-      new TextRun({ text: explanation, size: 18, color: '78350F', italics: true }),
+      createHighlightedTextRun(text, { isNew, ...options })
     ],
+    spacing: { after: 150 },
+  });
+}
+
+// Helper to create highlighted heading for new/changed sections
+function createHighlightedHeading(
+  text: string,
+  level: 1 | 2 | 3,
+  isNew: boolean = false
+): Paragraph {
+  const headingLevel = level === 1 ? HeadingLevel.HEADING_1
+    : level === 2 ? HeadingLevel.HEADING_2
+    : HeadingLevel.HEADING_3;
+
+  const sizes = { 1: FONT_SIZES.HEADING1, 2: FONT_SIZES.HEADING2, 3: FONT_SIZES.HEADING3 };
+  const colors = { 1: COLORS.PRIMARY, 2: COLORS.SECONDARY, 3: COLORS.TERTIARY };
+
+  return new Paragraph({
+    heading: headingLevel,
+    children: [
+      new TextRun({
+        text,
+        font: FONT,
+        size: sizes[level],
+        bold: true,
+        color: colors[level],
+        shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+      })
+    ],
+    spacing: { before: level === 1 ? 360 : level === 2 ? 280 : 240, after: level === 1 ? 200 : level === 2 ? 160 : 120 },
+  });
+}
+
+// Helper to create bullet point with optional highlighting
+function createHighlightedBullet(
+  text: string,
+  isNew: boolean = false
+): Paragraph {
+  return new Paragraph({
+    numbering: { reference: 'bullet-list', level: 0 },
+    children: [
+      createHighlightedTextRun(text, { isNew })
+    ],
+    spacing: { after: 80 },
   });
 }
 
@@ -138,7 +215,7 @@ function createComparisonTable(
     new TableCell({
       children: [
         new Paragraph({
-          children: [new TextRun({ text, bold: true, size: 20, color: 'FFFFFF' })],
+          children: [new TextRun({ text, bold: true, size: FONT_SIZES.SMALL, color: 'FFFFFF', font: FONT })],
           alignment: AlignmentType.CENTER,
         }),
       ],
@@ -152,7 +229,7 @@ function createComparisonTable(
     new TableCell({
       children: [
         new Paragraph({
-          children: [new TextRun({ text, bold: true, size: 20 })],
+          children: [new TextRun({ text, bold: true, size: FONT_SIZES.SMALL, font: FONT })],
         }),
       ],
       shading: labelShading,
@@ -166,7 +243,25 @@ function createComparisonTable(
     new TableCell({
       children: [
         new Paragraph({
-          children: [new TextRun({ text, size: 18 })],
+          children: [new TextRun({ text, size: FONT_SIZES.CODE, font: FONT })],
+        }),
+      ],
+      borders: cellBorders,
+      verticalAlign: VerticalAlign.CENTER,
+      width: width ? { size: width, type: WidthType.DXA } : undefined,
+    });
+
+  // Helper to create optimized cell with green highlight
+  const createOptimizedCell = (text: string, width?: number): TableCell =>
+    new TableCell({
+      children: [
+        new Paragraph({
+          children: [new TextRun({
+            text,
+            size: FONT_SIZES.CODE,
+            font: FONT,
+            shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
+          })],
         }),
       ],
       borders: cellBorders,
@@ -179,7 +274,7 @@ function createComparisonTable(
     new TableCell({
       children: [
         new Paragraph({
-          children: [new TextRun({ text, size: 16, italics: true, color: '4B5563' })],
+          children: [new TextRun({ text, size: 16, italics: true, color: '4B5563', font: FONT })],
         }),
       ],
       borders: cellBorders,
@@ -204,7 +299,7 @@ function createComparisonTable(
         children: [
           createLabelCell('Title Tag'),
           createContentCell(truncateText(crawledData.title, 50)),
-          createContentCell(truncateText(optimizedContent.metaTitle, 50)),
+          createOptimizedCell(truncateText(optimizedContent.metaTitle, 50)),
           createWhyCell('Primary keyword in first 30 chars, optimal length'),
         ],
       }),
@@ -213,7 +308,7 @@ function createComparisonTable(
         children: [
           createLabelCell('Meta Description'),
           createContentCell(truncateText(crawledData.metaDescription, 60)),
-          createContentCell(truncateText(optimizedContent.metaDescription, 60)),
+          createOptimizedCell(truncateText(optimizedContent.metaDescription, 60)),
           createWhyCell('Added CTA, included target keyword, compelling copy'),
         ],
       }),
@@ -222,7 +317,7 @@ function createComparisonTable(
         children: [
           createLabelCell('H1'),
           createContentCell(crawledData.h1[0] || 'Not set'),
-          createContentCell(optimizedContent.h1),
+          createOptimizedCell(optimizedContent.h1),
           createWhyCell('Differentiated from title, natural keyword placement'),
         ],
       }),
@@ -242,8 +337,8 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
       default: {
         document: {
           run: {
-            font: 'Arial',
-            size: 24, // 12pt
+            font: FONT,
+            size: FONT_SIZES.BODY,
           },
         },
       },
@@ -254,12 +349,14 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
           basedOn: 'Normal',
           next: 'Normal',
           run: {
-            size: 56, // 28pt
+            size: FONT_SIZES.TITLE,
             bold: true,
-            font: 'Arial',
+            font: FONT,
+            color: COLORS.TEXT,
           },
           paragraph: {
-            spacing: { after: 200 },
+            spacing: { after: 120 },
+            alignment: AlignmentType.LEFT,
           },
         },
         {
@@ -267,14 +364,16 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
           name: 'Heading 1',
           basedOn: 'Normal',
           next: 'Normal',
+          quickFormat: true,
           run: {
-            size: 32, // 16pt
+            size: FONT_SIZES.HEADING1,
             bold: true,
-            font: 'Arial',
-            color: '1a1a1a',
+            font: FONT,
+            color: COLORS.PRIMARY,
           },
           paragraph: {
-            spacing: { before: 240, after: 120 },
+            spacing: { before: 360, after: 200 },
+            outlineLevel: 0,
           },
         },
         {
@@ -282,14 +381,16 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
           name: 'Heading 2',
           basedOn: 'Normal',
           next: 'Normal',
+          quickFormat: true,
           run: {
-            size: 28, // 14pt
+            size: FONT_SIZES.HEADING2,
             bold: true,
-            font: 'Arial',
-            color: '333333',
+            font: FONT,
+            color: COLORS.SECONDARY,
           },
           paragraph: {
-            spacing: { before: 200, after: 100 },
+            spacing: { before: 280, after: 160 },
+            outlineLevel: 1,
           },
         },
         {
@@ -297,14 +398,41 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
           name: 'Heading 3',
           basedOn: 'Normal',
           next: 'Normal',
+          quickFormat: true,
           run: {
-            size: 24, // 12pt
+            size: FONT_SIZES.HEADING3,
             bold: true,
-            font: 'Arial',
-            color: '444444',
+            font: FONT,
+            color: COLORS.TERTIARY,
           },
           paragraph: {
-            spacing: { before: 160, after: 80 },
+            spacing: { before: 240, after: 120 },
+            outlineLevel: 2,
+          },
+        },
+        {
+          id: 'Normal',
+          name: 'Normal',
+          run: {
+            font: FONT,
+            size: FONT_SIZES.BODY,
+          },
+          paragraph: {
+            spacing: { after: 160, line: 276 },  // 1.15 line spacing
+          },
+        },
+        {
+          id: 'URL',
+          name: 'URL',
+          basedOn: 'Normal',
+          run: {
+            font: FONT,
+            size: FONT_SIZES.SMALL,
+            color: COLORS.LINK,
+            italics: true,
+          },
+          paragraph: {
+            spacing: { after: 300 },
           },
         },
         {
@@ -313,8 +441,8 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
           basedOn: 'Normal',
           run: {
             font: 'Consolas',
-            size: 18,
-            color: '374151',
+            size: FONT_SIZES.CODE,
+            color: COLORS.TEXT_LIGHT,
           },
           paragraph: {
             spacing: { before: 0, after: 0, line: 240 },
@@ -335,15 +463,80 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
           },
         },
         children: [
-          // Document Title - using HeadingLevel.TITLE for proper Word styling
+          // Document Title
           new Paragraph({
             heading: HeadingLevel.TITLE,
             children: [
               new TextRun({
                 text: `${clientName} - ${pageName} | Content Improvement`,
+                font: FONT,
+                size: FONT_SIZES.TITLE,
+                bold: true,
               }),
             ],
-            spacing: { after: 400 },
+            spacing: { after: 120 },
+          }),
+
+          // Target URL (right below title)
+          new Paragraph({
+            style: 'URL',
+            children: [
+              new TextRun({
+                text: 'Target Page: ',
+                font: FONT,
+                size: FONT_SIZES.SMALL,
+                bold: true,
+                color: COLORS.TEXT_LIGHT,
+              }),
+              new ExternalHyperlink({
+                children: [
+                  new TextRun({
+                    text: crawledData.url,
+                    font: FONT,
+                    size: FONT_SIZES.SMALL,
+                    color: COLORS.LINK,
+                    underline: {},
+                  }),
+                ],
+                link: crawledData.url,
+              }),
+            ],
+            spacing: { after: 300 },
+          }),
+
+          // Legend for green highlighting
+          new Paragraph({
+            spacing: { before: 200, after: 300 },
+            shading: { fill: 'F0FDF4', type: ShadingType.CLEAR },  // Very light green background
+            border: {
+              left: { style: BorderStyle.SINGLE, size: 24, color: COLORS.GREEN_BORDER },
+            },
+            indent: { left: 200, right: 200 },
+            children: [
+              new TextRun({
+                text: '📝 Reading Guide: ',
+                font: FONT,
+                size: 22,
+                bold: true,
+              }),
+              new TextRun({
+                text: 'Content highlighted in ',
+                font: FONT,
+                size: 22,
+              }),
+              new TextRun({
+                text: 'green',
+                font: FONT,
+                size: 22,
+                bold: true,
+                shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
+              }),
+              new TextRun({
+                text: ' indicates new or significantly changed content from the original page.',
+                font: FONT,
+                size: 22,
+              }),
+            ],
           }),
 
           // Section Header - Comparison Table
@@ -352,8 +545,9 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
               new TextRun({
                 text: 'Current vs Optimized Meta Elements',
                 bold: true,
-                size: 28,
-                font: 'Arial',
+                size: FONT_SIZES.HEADING2,
+                font: FONT,
+                color: COLORS.SECONDARY,
               }),
             ],
             heading: HeadingLevel.HEADING_2,
@@ -369,101 +563,70 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
               new TextRun({
                 text: 'OPTIMIZED CONTENT',
                 bold: true,
-                size: 28,
-                font: 'Arial',
-                color: '2563EB',
+                size: FONT_SIZES.HEADING2,
+                font: FONT,
+                color: COLORS.LINK,
               }),
             ],
-            spacing: { before: 400, after: 100 },
+            spacing: { before: 400, after: 200 },
           }),
 
-          // Info box about annotations
-          new Paragraph({
-            shading: { fill: 'DBEAFE', type: ShadingType.CLEAR }, // Light blue background
-            spacing: { before: 0, after: 200 },
-            indent: { left: 200, right: 200 },
-            children: [
-              new TextRun({
-                text: '\u2139\uFE0F The content below has been optimized for SEO. Yellow callout boxes explain what was changed and why.',
-                italics: true,
-                size: 20,
-                color: '1E40AF',
-              }),
-            ],
-          }),
-
-          // Change annotation for H1
-          createChangeAnnotation(
-            ChangeTypes.HEADING_OPTIMIZED,
-            `H1 optimized with primary keyword placement. Differentiated from title tag to avoid duplication.`
-          ),
-
-          // H1 as main heading
+          // H1 as main heading (with green highlight since it's optimized)
           new Paragraph({
             children: [
               new TextRun({
                 text: optimizedContent.h1,
                 bold: true,
-                size: 32,
-                font: 'Arial',
+                size: FONT_SIZES.HEADING1,
+                font: FONT,
+                color: COLORS.PRIMARY,
+                shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
               }),
             ],
             heading: HeadingLevel.HEADING_1,
             spacing: { before: 100, after: 200 },
           }),
 
-          // General content optimization annotation
-          createChangeAnnotation(
-            ChangeTypes.SEO_ENHANCED,
-            'Content restructured with target keywords naturally integrated throughout. Improved readability and value for readers.'
-          ),
+          // Full Content (with green highlighting for new content)
+          ...parseContentToParagraphs(optimizedContent.fullContent, crawledData.bodyContent),
 
-          // Full Content
-          ...parseContentToParagraphs(optimizedContent.fullContent),
-
-          // FAQs Section (if any)
+          // FAQs Section (if any) - with green highlight since these are new
           ...(optimizedContent.faqs.length > 0
             ? [
-                // Annotation for FAQs
-                createChangeAnnotation(
-                  ChangeTypes.FAQ_ADDED,
-                  'FAQs added to target featured snippets and "People Also Ask" results. These can be marked up with FAQPage schema.'
-                ),
                 new Paragraph({
                   children: [
                     new TextRun({
                       text: 'Frequently Asked Questions',
                       bold: true,
-                      size: 28,
-                      font: 'Arial',
+                      size: FONT_SIZES.HEADING2,
+                      font: FONT,
+                      color: COLORS.SECONDARY,
+                      shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
                     }),
                   ],
                   heading: HeadingLevel.HEADING_2,
-                  spacing: { before: 200, after: 200 },
+                  spacing: { before: 300, after: 200 },
                 }),
-                ...generateFAQParagraphs(optimizedContent.faqs),
+                ...generateFAQParagraphs(optimizedContent.faqs, true),  // true = highlight as new
               ]
             : []),
 
-          // Schema Recommendations (if any)
+          // Schema Recommendations (if any) - with green highlight since these are new
           ...(settings.includeSchemaRecommendations && optimizedContent.schemaRecommendations.length > 0
             ? [
-                // Annotation for Schema
-                createChangeAnnotation(
-                  ChangeTypes.SCHEMA_ADDED,
-                  'Schema markup recommendations to enable rich snippets in search results. Add these to your page\'s HTML.'
-                ),
                 new Paragraph({
                   children: [
                     new TextRun({
                       text: 'Schema Markup Recommendations',
                       bold: true,
-                      size: 28,
-                      font: 'Arial',
+                      size: FONT_SIZES.HEADING2,
+                      font: FONT,
+                      color: COLORS.SECONDARY,
+                      shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
                     }),
                   ],
                   heading: HeadingLevel.HEADING_2,
-                  spacing: { before: 200, after: 200 },
+                  spacing: { before: 300, after: 200 },
                 }),
                 ...generateSchemaParagraphs(optimizedContent.schemaRecommendations),
               ]
@@ -528,8 +691,8 @@ function parseInlineFormatting(text: string): InlineElement[] {
         elements.push(
           new TextRun({
             text: plainText,
-            size: 24,
-            font: 'Arial',
+            size: FONT_SIZES.BODY,
+            font: FONT,
           })
         );
       }
@@ -550,9 +713,9 @@ function parseInlineFormatting(text: string): InlineElement[] {
               new TextRun({
                 text: linkInBold[1],
                 bold: true,
-                size: 24,
-                font: 'Arial',
-                color: '2563EB',
+                size: FONT_SIZES.BODY,
+                font: FONT,
+                color: COLORS.LINK,
                 underline: { type: 'single' },
               }),
             ],
@@ -564,8 +727,8 @@ function parseInlineFormatting(text: string): InlineElement[] {
           new TextRun({
             text: boldContent,
             bold: true,
-            size: 24,
-            font: 'Arial',
+            size: FONT_SIZES.BODY,
+            font: FONT,
           })
         );
       }
@@ -576,8 +739,8 @@ function parseInlineFormatting(text: string): InlineElement[] {
         new TextRun({
           text: match[3],
           italics: true,
-          size: 24,
-          font: 'Arial',
+          size: FONT_SIZES.BODY,
+          font: FONT,
         })
       );
     }
@@ -590,9 +753,9 @@ function parseInlineFormatting(text: string): InlineElement[] {
           children: [
             new TextRun({
               text: linkText,
-              size: 24,
-              font: 'Arial',
-              color: '2563EB',
+              size: FONT_SIZES.BODY,
+              font: FONT,
+              color: COLORS.LINK,
               underline: { type: 'single' },
             }),
           ],
@@ -611,8 +774,8 @@ function parseInlineFormatting(text: string): InlineElement[] {
       elements.push(
         new TextRun({
           text: remainingText,
-          size: 24,
-          font: 'Arial',
+          size: FONT_SIZES.BODY,
+          font: FONT,
         })
       );
     }
@@ -623,8 +786,8 @@ function parseInlineFormatting(text: string): InlineElement[] {
     elements.push(
       new TextRun({
         text: cleanedText,
-        size: 24,
-        font: 'Arial',
+        size: FONT_SIZES.BODY,
+        font: FONT,
       })
     );
   }
@@ -632,9 +795,162 @@ function parseInlineFormatting(text: string): InlineElement[] {
   return elements;
 }
 
-function parseContentToParagraphs(content: string): Paragraph[] {
+/**
+ * Parse inline markdown formatting with optional green highlighting for new content
+ */
+function parseInlineFormattingWithHighlight(text: string, isNew: boolean = false): InlineElement[] {
+  const elements: InlineElement[] = [];
+
+  // Clean escaped markdown first
+  let cleanedText = cleanMarkdownEscapes(text);
+
+  // Combined regex to match: **bold**, *italic*, [link](url), or plain text
+  const inlinePattern = /(\*\*(.+?)\*\*|\*([^*]+)\*|\[([^\]]+)\]\(([^)]+)\))/g;
+
+  let lastIndex = 0;
+  let match;
+
+  while ((match = inlinePattern.exec(cleanedText)) !== null) {
+    // Add plain text before this match
+    if (match.index > lastIndex) {
+      const plainText = cleanedText.substring(lastIndex, match.index);
+      if (plainText) {
+        elements.push(
+          new TextRun({
+            text: plainText,
+            size: FONT_SIZES.BODY,
+            font: FONT,
+            shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+          })
+        );
+      }
+    }
+
+    const fullMatch = match[0];
+
+    // Bold: **text**
+    if (fullMatch.startsWith('**') && fullMatch.endsWith('**')) {
+      const boldContent = match[2];
+      const linkInBold = boldContent.match(/\[([^\]]+)\]\(([^)]+)\)/);
+      if (linkInBold) {
+        elements.push(
+          new ExternalHyperlink({
+            children: [
+              new TextRun({
+                text: linkInBold[1],
+                bold: true,
+                size: FONT_SIZES.BODY,
+                font: FONT,
+                color: COLORS.LINK,
+                underline: { type: 'single' },
+                shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+              }),
+            ],
+            link: linkInBold[2],
+          })
+        );
+      } else {
+        elements.push(
+          new TextRun({
+            text: boldContent,
+            bold: true,
+            size: FONT_SIZES.BODY,
+            font: FONT,
+            shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+          })
+        );
+      }
+    }
+    // Italic: *text*
+    else if (fullMatch.startsWith('*') && !fullMatch.startsWith('**') && fullMatch.endsWith('*')) {
+      elements.push(
+        new TextRun({
+          text: match[3],
+          italics: true,
+          size: FONT_SIZES.BODY,
+          font: FONT,
+          shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+        })
+      );
+    }
+    // Link: [text](url)
+    else if (fullMatch.startsWith('[')) {
+      const linkText = match[4];
+      const linkUrl = match[5];
+      elements.push(
+        new ExternalHyperlink({
+          children: [
+            new TextRun({
+              text: linkText,
+              size: FONT_SIZES.BODY,
+              font: FONT,
+              color: COLORS.LINK,
+              underline: { type: 'single' },
+              shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+            }),
+          ],
+          link: linkUrl,
+        })
+      );
+    }
+
+    lastIndex = match.index + fullMatch.length;
+  }
+
+  // Add remaining plain text after last match
+  if (lastIndex < cleanedText.length) {
+    const remainingText = cleanedText.substring(lastIndex);
+    if (remainingText) {
+      elements.push(
+        new TextRun({
+          text: remainingText,
+          size: FONT_SIZES.BODY,
+          font: FONT,
+          shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+        })
+      );
+    }
+  }
+
+  // If no matches found, return the whole text as a single TextRun
+  if (elements.length === 0) {
+    elements.push(
+      new TextRun({
+        text: cleanedText,
+        size: FONT_SIZES.BODY,
+        font: FONT,
+        shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+      })
+    );
+  }
+
+  return elements;
+}
+
+// Helper to check if content is new/changed compared to original
+function isContentNew(text: string, originalContent: string): boolean {
+  if (!originalContent) return true;
+
+  const originalLower = originalContent.toLowerCase();
+  const textLower = text.toLowerCase().trim();
+
+  // Check first 50 characters as a key phrase
+  const keyPhrase = textLower.slice(0, 50);
+
+  // If the key phrase exists in original, it's not new
+  if (originalLower.includes(keyPhrase)) return false;
+
+  // Check for first 5 words match
+  const firstWords = textLower.split(' ').slice(0, 5).join(' ');
+  if (originalLower.includes(firstWords)) return false;
+
+  return true;
+}
+
+function parseContentToParagraphs(content: string, originalContent?: string): Paragraph[] {
   const paragraphs: Paragraph[] = [];
   const lines = content.split('\n');
+  const original = originalContent || '';
 
   for (const line of lines) {
     const trimmedLine = line.trim();
@@ -647,14 +963,17 @@ function parseContentToParagraphs(content: string): Paragraph[] {
     // H1 heading (#)
     if (trimmedLine.startsWith('# ') && !trimmedLine.startsWith('## ')) {
       const headingText = trimmedLine.replace('# ', '');
+      const isNew = isContentNew(headingText, original);
       paragraphs.push(
         new Paragraph({
           children: [
             new TextRun({
               text: cleanMarkdownEscapes(headingText),
               bold: true,
-              size: 32,
-              font: 'Arial',
+              size: FONT_SIZES.HEADING1,
+              font: FONT,
+              color: COLORS.PRIMARY,
+              shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
             }),
           ],
           heading: HeadingLevel.HEADING_1,
@@ -667,14 +986,17 @@ function parseContentToParagraphs(content: string): Paragraph[] {
     // H2 heading (##)
     if (trimmedLine.startsWith('## ') && !trimmedLine.startsWith('### ')) {
       const headingText = trimmedLine.replace('## ', '');
+      const isNew = isContentNew(headingText, original);
       paragraphs.push(
         new Paragraph({
           children: [
             new TextRun({
               text: cleanMarkdownEscapes(headingText),
               bold: true,
-              size: 28,
-              font: 'Arial',
+              size: FONT_SIZES.HEADING2,
+              font: FONT,
+              color: COLORS.SECONDARY,
+              shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
             }),
           ],
           heading: HeadingLevel.HEADING_2,
@@ -687,14 +1009,17 @@ function parseContentToParagraphs(content: string): Paragraph[] {
     // H3 heading (###)
     if (trimmedLine.startsWith('### ')) {
       const headingText = trimmedLine.replace('### ', '');
+      const isNew = isContentNew(headingText, original);
       paragraphs.push(
         new Paragraph({
           children: [
             new TextRun({
               text: cleanMarkdownEscapes(headingText),
               bold: true,
-              size: 24,
-              font: 'Arial',
+              size: FONT_SIZES.HEADING3,
+              font: FONT,
+              color: COLORS.TERTIARY,
+              shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
             }),
           ],
           heading: HeadingLevel.HEADING_3,
@@ -707,10 +1032,11 @@ function parseContentToParagraphs(content: string): Paragraph[] {
     // Bullet point - use Word's native numbering with inline formatting
     if (trimmedLine.startsWith('- ') || trimmedLine.startsWith('* ')) {
       const bulletContent = trimmedLine.substring(2);
+      const isNew = isContentNew(bulletContent, original);
       paragraphs.push(
         new Paragraph({
           numbering: { reference: 'bullet-list', level: 0 },
-          children: parseInlineFormatting(bulletContent),
+          children: parseInlineFormattingWithHighlight(bulletContent, isNew),
           spacing: { after: 80 },
         })
       );
@@ -720,10 +1046,11 @@ function parseContentToParagraphs(content: string): Paragraph[] {
     // Numbered list - use Word's native numbering with inline formatting
     const numberMatch = trimmedLine.match(/^(\d+)\.\s(.+)/);
     if (numberMatch) {
+      const isNew = isContentNew(numberMatch[2], original);
       paragraphs.push(
         new Paragraph({
           numbering: { reference: 'numbered-list', level: 0 },
-          children: parseInlineFormatting(numberMatch[2]),
+          children: parseInlineFormattingWithHighlight(numberMatch[2], isNew),
           spacing: { after: 80 },
         })
       );
@@ -731,9 +1058,10 @@ function parseContentToParagraphs(content: string): Paragraph[] {
     }
 
     // Regular paragraph with inline formatting
+    const isNew = isContentNew(trimmedLine, original);
     paragraphs.push(
       new Paragraph({
-        children: parseInlineFormatting(trimmedLine),
+        children: parseInlineFormattingWithHighlight(trimmedLine, isNew),
         spacing: { after: 150 },
       })
     );
@@ -742,7 +1070,7 @@ function parseContentToParagraphs(content: string): Paragraph[] {
   return paragraphs;
 }
 
-function generateFAQParagraphs(faqs: FAQ[]): Paragraph[] {
+function generateFAQParagraphs(faqs: FAQ[], highlightAsNew: boolean = false): Paragraph[] {
   const paragraphs: Paragraph[] = [];
 
   faqs.forEach((faq) => {
@@ -753,8 +1081,9 @@ function generateFAQParagraphs(faqs: FAQ[]): Paragraph[] {
           new TextRun({
             text: `Q: ${faq.question}`,
             bold: true,
-            size: 24,
-            font: 'Arial',
+            size: FONT_SIZES.BODY,
+            font: FONT,
+            shading: highlightAsNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
           }),
         ],
         spacing: { before: 200, after: 100 },
@@ -767,8 +1096,9 @@ function generateFAQParagraphs(faqs: FAQ[]): Paragraph[] {
         children: [
           new TextRun({
             text: `A: ${faq.answer}`,
-            size: 24,
-            font: 'Arial',
+            size: FONT_SIZES.BODY,
+            font: FONT,
+            shading: highlightAsNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
           }),
         ],
         spacing: { after: 150 },
@@ -791,8 +1121,9 @@ function generateSchemaParagraphs(recommendations: SchemaRecommendation[]): Para
           new TextRun({
             text: rec.type,
             bold: true,
-            size: 24,
-            font: 'Arial',
+            size: FONT_SIZES.BODY,
+            font: FONT,
+            shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
           }),
         ],
         spacing: { before: 200, after: 50 },
@@ -806,7 +1137,7 @@ function generateSchemaParagraphs(recommendations: SchemaRecommendation[]): Para
           new TextRun({
             text: rec.reason,
             size: 22,
-            font: 'Arial',
+            font: FONT,
             italics: true,
           }),
         ],
@@ -897,7 +1228,7 @@ function createMetadataTable(
           children: [
             new Paragraph({
               children: [
-                new TextRun({ text: 'Target Keyword(s)', bold: true, size: 22 }),
+                new TextRun({ text: 'Target Keyword(s)', bold: true, size: 22, font: FONT }),
               ],
             }),
           ],
@@ -909,7 +1240,7 @@ function createMetadataTable(
           children: [
             new Paragraph({
               children: [
-                new TextRun({ text: keywordText + nlpText, size: 22 }),
+                new TextRun({ text: keywordText + nlpText, size: 22, font: FONT }),
               ],
             }),
           ],
@@ -926,7 +1257,7 @@ function createMetadataTable(
           children: [
             new Paragraph({
               children: [
-                new TextRun({ text: 'Target Page URL', bold: true, size: 22 }),
+                new TextRun({ text: 'Target Page URL', bold: true, size: 22, font: FONT }),
               ],
             }),
           ],
@@ -938,7 +1269,7 @@ function createMetadataTable(
           children: [
             new Paragraph({
               children: [
-                new TextRun({ text: crawledData.url, size: 22, color: '2563EB' }),
+                new TextRun({ text: crawledData.url, size: 22, font: FONT, color: COLORS.LINK }),
               ],
             }),
           ],
@@ -955,7 +1286,7 @@ function createMetadataTable(
           children: [
             new Paragraph({
               children: [
-                new TextRun({ text: 'Updated Title Tag', bold: true, size: 22 }),
+                new TextRun({ text: 'Updated Title Tag', bold: true, size: 22, font: FONT }),
               ],
             }),
           ],
@@ -970,6 +1301,8 @@ function createMetadataTable(
                 new TextRun({
                   text: `${optimizedContent.metaTitle} (${optimizedContent.metaTitle.length} chars)`,
                   size: 22,
+                  font: FONT,
+                  shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
                 }),
               ],
             }),
@@ -987,7 +1320,7 @@ function createMetadataTable(
           children: [
             new Paragraph({
               children: [
-                new TextRun({ text: 'Updated Meta Description', bold: true, size: 22 }),
+                new TextRun({ text: 'Updated Meta Description', bold: true, size: 22, font: FONT }),
               ],
             }),
           ],
@@ -1002,6 +1335,8 @@ function createMetadataTable(
                 new TextRun({
                   text: `${optimizedContent.metaDescription} (${optimizedContent.metaDescription.length} chars)`,
                   size: 22,
+                  font: FONT,
+                  shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
                 }),
               ],
             }),
@@ -1019,7 +1354,7 @@ function createMetadataTable(
           children: [
             new Paragraph({
               children: [
-                new TextRun({ text: 'Current H1', bold: true, size: 22 }),
+                new TextRun({ text: 'Current H1', bold: true, size: 22, font: FONT }),
               ],
             }),
           ],
@@ -1034,6 +1369,7 @@ function createMetadataTable(
                 new TextRun({
                   text: crawledData.h1[0] || 'No H1 found',
                   size: 22,
+                  font: FONT,
                   italics: !crawledData.h1[0],
                 }),
               ],
@@ -1052,7 +1388,7 @@ function createMetadataTable(
           children: [
             new Paragraph({
               children: [
-                new TextRun({ text: 'New H1', bold: true, size: 22 }),
+                new TextRun({ text: 'New H1', bold: true, size: 22, font: FONT }),
               ],
             }),
           ],
@@ -1064,7 +1400,12 @@ function createMetadataTable(
           children: [
             new Paragraph({
               children: [
-                new TextRun({ text: optimizedContent.h1, size: 22 }),
+                new TextRun({
+                  text: optimizedContent.h1,
+                  size: 22,
+                  font: FONT,
+                  shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
+                }),
               ],
             }),
           ],
