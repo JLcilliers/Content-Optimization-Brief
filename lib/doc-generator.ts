@@ -12,6 +12,8 @@ import {
   convertInchesToTwip,
   ShadingType,
   Packer,
+  LevelFormat,
+  INumberingOptions,
 } from 'docx';
 import type { AnalysisResult, Settings, FAQ, SchemaRecommendation } from '@/types';
 
@@ -22,11 +24,61 @@ interface DocGeneratorOptions {
   pageName: string;
 }
 
+// Numbering configuration for bullet lists
+const numberingConfig: INumberingOptions = {
+  config: [
+    {
+      reference: 'bullet-list',
+      levels: [
+        {
+          level: 0,
+          format: LevelFormat.BULLET,
+          text: '\u2022',
+          alignment: AlignmentType.LEFT,
+          style: {
+            paragraph: {
+              indent: { left: 720, hanging: 360 },
+            },
+          },
+        },
+        {
+          level: 1,
+          format: LevelFormat.BULLET,
+          text: '\u25E6',
+          alignment: AlignmentType.LEFT,
+          style: {
+            paragraph: {
+              indent: { left: 1440, hanging: 360 },
+            },
+          },
+        },
+      ],
+    },
+    {
+      reference: 'numbered-list',
+      levels: [
+        {
+          level: 0,
+          format: LevelFormat.DECIMAL,
+          text: '%1.',
+          alignment: AlignmentType.LEFT,
+          style: {
+            paragraph: {
+              indent: { left: 720, hanging: 360 },
+            },
+          },
+        },
+      ],
+    },
+  ],
+};
+
 export async function generateDocument(options: DocGeneratorOptions): Promise<Buffer> {
   const { analysisResult, settings, clientName, pageName } = options;
   const { crawledData, optimizedContent, keywords } = analysisResult;
 
   const doc = new Document({
+    numbering: numberingConfig,
     styles: {
       default: {
         document: {
@@ -96,6 +148,19 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
             spacing: { before: 160, after: 80 },
           },
         },
+        {
+          id: 'CodeBlock',
+          name: 'Code Block',
+          basedOn: 'Normal',
+          run: {
+            font: 'Consolas',
+            size: 18,
+            color: '374151',
+          },
+          paragraph: {
+            spacing: { before: 100, after: 100 },
+          },
+        },
       ],
     },
     sections: [
@@ -111,14 +176,12 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
           },
         },
         children: [
-          // Document Title
+          // Document Title - using HeadingLevel.TITLE for proper Word styling
           new Paragraph({
+            heading: HeadingLevel.TITLE,
             children: [
               new TextRun({
                 text: `${clientName} - ${pageName} | Content Improvement`,
-                bold: true,
-                size: 56,
-                font: 'Arial',
               }),
             ],
             spacing: { after: 400 },
@@ -272,38 +335,38 @@ function parseContentToParagraphs(content: string): Paragraph[] {
       continue;
     }
 
-    // Bullet point
+    // Bullet point - use Word's native numbering
     if (trimmedLine.startsWith('- ') || trimmedLine.startsWith('* ')) {
       paragraphs.push(
         new Paragraph({
+          numbering: { reference: 'bullet-list', level: 0 },
           children: [
             new TextRun({
-              text: '• ' + trimmedLine.substring(2),
+              text: trimmedLine.substring(2),
               size: 24,
               font: 'Arial',
             }),
           ],
           spacing: { after: 80 },
-          indent: { left: convertInchesToTwip(0.5) },
         })
       );
       continue;
     }
 
-    // Numbered list
-    const numberMatch = trimmedLine.match(/^(\d+)\.\s/);
+    // Numbered list - use Word's native numbering
+    const numberMatch = trimmedLine.match(/^(\d+)\.\s(.+)/);
     if (numberMatch) {
       paragraphs.push(
         new Paragraph({
+          numbering: { reference: 'numbered-list', level: 0 },
           children: [
             new TextRun({
-              text: trimmedLine,
+              text: numberMatch[2],
               size: 24,
               font: 'Arial',
             }),
           ],
           spacing: { after: 80 },
-          indent: { left: convertInchesToTwip(0.5) },
         })
       );
       continue;
@@ -439,23 +502,40 @@ function generateSchemaParagraphs(recommendations: SchemaRecommendation[]): Para
       })
     );
 
-    // JSON-LD code
-    paragraphs.push(
-      new Paragraph({
-        children: [
-          new TextRun({
-            text: rec.jsonLd,
-            size: 18,
-            font: 'Courier New',
-          }),
-        ],
-        spacing: { after: 200 },
-        shading: {
-          type: ShadingType.SOLID,
-          color: 'F5F5F5',
-        },
-      })
-    );
+    // JSON-LD code - format with proper indentation
+    // Parse and re-stringify to ensure proper formatting
+    let formattedJson = rec.jsonLd;
+    try {
+      const parsed = JSON.parse(rec.jsonLd);
+      formattedJson = JSON.stringify(parsed, null, 2);
+    } catch {
+      // If parsing fails, use original
+    }
+
+    // Split JSON into lines and create separate paragraphs for each line
+    const jsonLines = formattedJson.split('\n');
+    jsonLines.forEach((line, index) => {
+      paragraphs.push(
+        new Paragraph({
+          style: 'CodeBlock',
+          children: [
+            new TextRun({
+              text: line,
+              font: 'Consolas',
+              size: 18,
+            }),
+          ],
+          shading: {
+            type: ShadingType.CLEAR,
+            fill: 'F3F4F6',
+          },
+          spacing: {
+            before: index === 0 ? 100 : 0,
+            after: index === jsonLines.length - 1 ? 200 : 0
+          },
+        })
+      );
+    });
   });
 
   return paragraphs;
@@ -467,18 +547,23 @@ function createMetadataTable(
   keywords: AnalysisResult['keywords'],
   settings: Settings
 ): Table {
-  const headerShading = { type: ShadingType.SOLID, color: 'D5E8F0' };
-  const borderStyle = {
+  // Orange/peach shading for left column as per requirements
+  const headerShading = { type: ShadingType.CLEAR, fill: 'f9cb9c' };
+  const tableBorder = {
     style: BorderStyle.SINGLE,
     size: 1,
     color: 'CCCCCC',
   };
-  const borders = {
-    top: borderStyle,
-    bottom: borderStyle,
-    left: borderStyle,
-    right: borderStyle,
+  const cellBorders = {
+    top: tableBorder,
+    bottom: tableBorder,
+    left: tableBorder,
+    right: tableBorder,
   };
+
+  // Column widths in DXA: left ~30% (2800), right ~70% (6560)
+  const leftColWidth = { size: 2800, type: WidthType.DXA };
+  const rightColWidth = { size: 6560, type: WidthType.DXA };
 
   // Format keywords for the table
   const keywordText = [
@@ -502,9 +587,9 @@ function createMetadataTable(
               ],
             }),
           ],
-          width: { size: 30, type: WidthType.PERCENTAGE },
+          width: leftColWidth,
           shading: headerShading,
-          borders,
+          borders: cellBorders,
         }),
         new TableCell({
           children: [
@@ -514,8 +599,8 @@ function createMetadataTable(
               ],
             }),
           ],
-          width: { size: 70, type: WidthType.PERCENTAGE },
-          borders,
+          width: rightColWidth,
+          borders: cellBorders,
         }),
       ],
     }),
@@ -531,8 +616,9 @@ function createMetadataTable(
               ],
             }),
           ],
+          width: leftColWidth,
           shading: headerShading,
-          borders,
+          borders: cellBorders,
         }),
         new TableCell({
           children: [
@@ -542,7 +628,8 @@ function createMetadataTable(
               ],
             }),
           ],
-          borders,
+          width: rightColWidth,
+          borders: cellBorders,
         }),
       ],
     }),
@@ -558,8 +645,9 @@ function createMetadataTable(
               ],
             }),
           ],
+          width: leftColWidth,
           shading: headerShading,
-          borders,
+          borders: cellBorders,
         }),
         new TableCell({
           children: [
@@ -572,7 +660,8 @@ function createMetadataTable(
               ],
             }),
           ],
-          borders,
+          width: rightColWidth,
+          borders: cellBorders,
         }),
       ],
     }),
@@ -588,8 +677,9 @@ function createMetadataTable(
               ],
             }),
           ],
+          width: leftColWidth,
           shading: headerShading,
-          borders,
+          borders: cellBorders,
         }),
         new TableCell({
           children: [
@@ -602,7 +692,8 @@ function createMetadataTable(
               ],
             }),
           ],
-          borders,
+          width: rightColWidth,
+          borders: cellBorders,
         }),
       ],
     }),
@@ -618,8 +709,9 @@ function createMetadataTable(
               ],
             }),
           ],
+          width: leftColWidth,
           shading: headerShading,
-          borders,
+          borders: cellBorders,
         }),
         new TableCell({
           children: [
@@ -633,7 +725,8 @@ function createMetadataTable(
               ],
             }),
           ],
-          borders,
+          width: rightColWidth,
+          borders: cellBorders,
         }),
       ],
     }),
@@ -649,8 +742,9 @@ function createMetadataTable(
               ],
             }),
           ],
+          width: leftColWidth,
           shading: headerShading,
-          borders,
+          borders: cellBorders,
         }),
         new TableCell({
           children: [
@@ -660,7 +754,8 @@ function createMetadataTable(
               ],
             }),
           ],
-          borders,
+          width: rightColWidth,
+          borders: cellBorders,
         }),
       ],
     }),
