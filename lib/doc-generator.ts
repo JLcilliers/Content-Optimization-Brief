@@ -158,7 +158,7 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
             color: '374151',
           },
           paragraph: {
-            spacing: { before: 100, after: 100 },
+            spacing: { before: 0, after: 0, line: 240 },
           },
         },
       ],
@@ -513,6 +513,7 @@ function generateSchemaParagraphs(recommendations: SchemaRecommendation[]): Para
     }
 
     // Split JSON into lines and create separate paragraphs for each line
+    // Use tight spacing (line: 240) so it looks like a cohesive code block
     const jsonLines = formattedJson.split('\n');
     jsonLines.forEach((line, index) => {
       paragraphs.push(
@@ -520,7 +521,7 @@ function generateSchemaParagraphs(recommendations: SchemaRecommendation[]): Para
           style: 'CodeBlock',
           children: [
             new TextRun({
-              text: line,
+              text: line || ' ', // Use space for empty lines to maintain shading
               font: 'Consolas',
               size: 18,
             }),
@@ -531,7 +532,8 @@ function generateSchemaParagraphs(recommendations: SchemaRecommendation[]): Para
           },
           spacing: {
             before: index === 0 ? 100 : 0,
-            after: index === jsonLines.length - 1 ? 200 : 0
+            after: index === jsonLines.length - 1 ? 200 : 0,
+            line: 240, // Tight line spacing for cohesive code block
           },
         })
       );
