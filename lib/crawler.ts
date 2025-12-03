@@ -135,13 +135,17 @@ function extractFromHtml(html: string): {
 }
 
 function extractHeadings(html: string, tag: string): string[] {
-  const regex = new RegExp(`<${tag}[^>]*>([^<]*(?:<[^/h][^>]*>[^<]*)*)<\/${tag}>`, 'gi');
+  // More robust regex that handles multi-line content and nested tags
+  const regex = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'gi');
   const headings: string[] = [];
   let match;
 
   while ((match = regex.exec(html)) !== null) {
-    // Remove HTML tags from heading content
-    const cleanText = match[1].replace(/<[^>]*>/g, '').trim();
+    // Remove HTML tags from heading content and clean up whitespace
+    const cleanText = match[1]
+      .replace(/<[^>]*>/g, '') // Remove all HTML tags
+      .replace(/\s+/g, ' ')    // Normalize whitespace
+      .trim();
     if (cleanText) {
       headings.push(cleanText);
     }
