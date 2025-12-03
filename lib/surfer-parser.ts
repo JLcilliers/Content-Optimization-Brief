@@ -1,5 +1,4 @@
 import puppeteer, { Browser } from 'puppeteer-core';
-import chromium from '@sparticuz/chromium';
 
 export interface SurferTerm {
   term: string;
@@ -19,6 +18,36 @@ export interface SurferReportData {
   questions: string[];
   headings: string[];
   error?: string;
+}
+
+// Track if we're using Browserless.io (for proper cleanup)
+let usingBrowserless = false;
+
+async function getBrowser(): Promise<Browser> {
+  const browserlessToken = process.env.BROWSERLESS_TOKEN;
+
+  // Production: Use Browserless.io cloud browser
+  if (browserlessToken) {
+    console.log('[Surfer Parser] Connecting to Browserless.io...');
+    usingBrowserless = true;
+    return puppeteer.connect({
+      browserWSEndpoint: `wss://chrome.browserless.io?token=${browserlessToken}`,
+    });
+  }
+
+  // Local development: Use local Puppeteer
+  if (process.env.NODE_ENV === 'development') {
+    console.log('[Surfer Parser] Using local Puppeteer for development...');
+    usingBrowserless = false;
+    // Dynamic import for dev only (puppeteer is a dev dependency)
+    const puppeteerFull = await import('puppeteer');
+    return puppeteerFull.default.launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+    });
+  }
+
+  throw new Error('BROWSERLESS_TOKEN environment variable is required in production');
 }
 
 export async function parseSurferAuditReport(reportUrl: string): Promise<SurferReportData> {
@@ -42,13 +71,7 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
   try {
     console.log('[Surfer Parser] Launching browser...');
 
-    // Use @sparticuz/chromium for Vercel serverless compatibility
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: { width: 1920, height: 1080 },
-      executablePath: await chromium.executablePath(),
-      headless: true,
-    });
+    browser = await getBrowser();
 
     const page = await browser.newPage();
 
@@ -63,7 +86,7 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
     // Navigate with extended timeout
     await page.goto(reportUrl, {
       waitUntil: 'networkidle2',
-      timeout: 60000
+      timeout: 45000
     });
 
     // Wait for content to load
@@ -413,7 +436,12 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
     };
   } finally {
     if (browser) {
-      await browser.close();
+      // For Browserless.io, disconnect instead of close
+      if (usingBrowserless) {
+        await browser.disconnect();
+      } else {
+        await browser.close();
+      }
     }
   }
 }
