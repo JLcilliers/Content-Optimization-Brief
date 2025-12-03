@@ -1,0 +1,258 @@
+"use client"
+
+import { useState, useCallback } from "react"
+import { Header } from "@/components/header"
+import { UrlInput } from "@/components/url-input"
+import { KeywordUpload } from "@/components/keyword-upload"
+import { AnalysisProgress } from "@/components/analysis-progress"
+import { ResultsPreview } from "@/components/results-preview"
+import { SettingsPanel } from "@/components/settings-panel"
+import type { AnalysisResult, KeywordData, Settings } from "@/types"
+import { extractDomain } from "@/lib/utils"
+
+interface ProgressStep {
+  id: string
+  label: string
+  status: 'pending' | 'in_progress' | 'completed' | 'error'
+}
+
+const initialSteps: ProgressStep[] = [
+  { id: 'crawl', label: 'Crawling page content', status: 'pending' },
+  { id: 'meta', label: 'Extracting meta data', status: 'pending' },
+  { id: 'headings', label: 'Analyzing heading structure', status: 'pending' },
+  { id: 'schema', label: 'Detecting schema markup', status: 'pending' },
+  { id: 'keywords', label: 'Processing keywords', status: 'pending' },
+  { id: 'generate', label: 'Generating recommendations', status: 'pending' },
+]
+
+const defaultSettings: Settings = {
+  brandName: '',
+  titleMaxLength: 60,
+  descriptionMaxLength: 160,
+  tone: 'professional',
+  includeSchemaRecommendations: true,
+}
+
+export default function Home() {
+  const [isAnalyzing, setIsAnalyzing] = useState(false)
+  const [isGeneratingDoc, setIsGeneratingDoc] = useState(false)
+  const [keywords, setKeywords] = useState<KeywordData | null>(null)
+  const [settings, setSettings] = useState<Settings>(defaultSettings)
+  const [results, setResults] = useState<AnalysisResult | null>(null)
+  const [error, setError] = useState("")
+  const [progressSteps, setProgressSteps] = useState<ProgressStep[]>(initialSteps)
+  const [currentMessage, setCurrentMessage] = useState("")
+  const [analyzedUrl, setAnalyzedUrl] = useState("")
+
+  const updateStepStatus = (stepId: string, status: ProgressStep['status']) => {
+    setProgressSteps(prev =>
+      prev.map(step =>
+        step.id === stepId ? { ...step, status } : step
+      )
+    )
+  }
+
+  const resetProgress = () => {
+    setProgressSteps(initialSteps.map(step => ({ ...step, status: 'pending' })))
+    setCurrentMessage("")
+    setError("")
+  }
+
+  const handleAnalyze = useCallback(async (url: string) => {
+    setIsAnalyzing(true)
+    setResults(null)
+    setError("")
+    setAnalyzedUrl(url)
+    resetProgress()
+
+    try {
+      // Simulate step progress for better UX
+      const steps = ['crawl', 'meta', 'headings', 'schema', 'keywords', 'generate']
+
+      // Start first step
+      updateStepStatus('crawl', 'in_progress')
+      setCurrentMessage('Connecting to page...')
+
+      // Make the API call
+      const response = await fetch('/api/analyze', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          keywords: keywords || {
+            primary: [],
+            secondary: [],
+            nlpTerms: [],
+            questions: [],
+            longTail: [],
+            all: [],
+          },
+          settings,
+        }),
+      })
+
+      // Simulate progress updates
+      for (let i = 0; i < steps.length; i++) {
+        updateStepStatus(steps[i], 'completed')
+        if (i < steps.length - 1) {
+          updateStepStatus(steps[i + 1], 'in_progress')
+          setCurrentMessage(getProgressMessage(steps[i + 1]))
+        }
+        // Small delay for visual feedback
+        await new Promise(resolve => setTimeout(resolve, 300))
+      }
+
+      const data = await response.json()
+
+      if (!data.success) {
+        throw new Error(data.error || 'Analysis failed')
+      }
+
+      setResults(data.data)
+      setCurrentMessage('Analysis complete!')
+
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : 'Something went wrong'
+      setError(errorMessage)
+      // Mark current step as error
+      setProgressSteps(prev =>
+        prev.map(step =>
+          step.status === 'in_progress' ? { ...step, status: 'error' } : step
+        )
+      )
+    } finally {
+      setIsAnalyzing(false)
+    }
+  }, [keywords, settings])
+
+  const handleCancel = () => {
+    setIsAnalyzing(false)
+    resetProgress()
+  }
+
+  const handleDownload = async () => {
+    if (!results) return
+
+    setIsGeneratingDoc(true)
+    try {
+      // Extract client name and page name from URL
+      const domain = extractDomain(analyzedUrl)
+      const clientName = settings.brandName || domain.split('.')[0] || 'Client'
+      const pathParts = analyzedUrl.split('/').filter(Boolean)
+      const pageName = pathParts[pathParts.length - 1] || 'Homepage'
+
+      const response = await fetch('/api/generate-doc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          analysisResult: results,
+          settings,
+          clientName,
+          pageName,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to generate document')
+      }
+
+      // Download the file
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `${clientName}_${pageName}_Content_Improvement.docx`.replace(/[^a-zA-Z0-9_-]/g, '_')
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(url)
+      document.body.removeChild(a)
+
+    } catch (err) {
+      console.error('Download error:', err)
+      alert('Failed to generate document. Please try again.')
+    } finally {
+      setIsGeneratingDoc(false)
+    }
+  }
+
+  const handleKeywordsLoaded = (loadedKeywords: KeywordData) => {
+    setKeywords(loadedKeywords)
+  }
+
+  return (
+    <div className="min-h-screen bg-background">
+      <Header />
+
+      <main className="container py-8">
+        <div className="max-w-4xl mx-auto space-y-6">
+          {/* URL Input Section */}
+          <UrlInput
+            onAnalyze={handleAnalyze}
+            isAnalyzing={isAnalyzing}
+            disabled={isAnalyzing}
+          />
+
+          {/* Keyword Upload and Settings */}
+          <div className="grid gap-6 md:grid-cols-2">
+            <KeywordUpload
+              onKeywordsLoaded={handleKeywordsLoaded}
+              keywords={keywords}
+              disabled={isAnalyzing}
+            />
+            <SettingsPanel
+              settings={settings}
+              onSettingsChange={setSettings}
+              disabled={isAnalyzing}
+            />
+          </div>
+
+          {/* Analysis Progress */}
+          {isAnalyzing && (
+            <AnalysisProgress
+              steps={progressSteps}
+              currentMessage={currentMessage}
+              onCancel={handleCancel}
+              error={error}
+            />
+          )}
+
+          {/* Results Preview */}
+          {results && !isAnalyzing && (
+            <ResultsPreview
+              results={results}
+              settings={settings}
+              onDownload={handleDownload}
+              isGenerating={isGeneratingDoc}
+            />
+          )}
+
+          {/* Error Display (when not in progress) */}
+          {error && !isAnalyzing && (
+            <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg text-destructive">
+              <p className="font-medium">Analysis Failed</p>
+              <p className="text-sm mt-1">{error}</p>
+            </div>
+          )}
+        </div>
+      </main>
+
+      <footer className="border-t py-6 mt-12">
+        <div className="container text-center text-sm text-muted-foreground">
+          <p>SEO Content Optimizer - Analyze, optimize, and export SEO-ready content</p>
+        </div>
+      </footer>
+    </div>
+  )
+}
+
+function getProgressMessage(stepId: string): string {
+  const messages: Record<string, string> = {
+    crawl: 'Crawling page content...',
+    meta: 'Extracting meta data and titles...',
+    headings: 'Analyzing heading structure...',
+    schema: 'Detecting schema markup...',
+    keywords: 'Processing and analyzing keywords...',
+    generate: 'Generating AI-powered recommendations...',
+  }
+  return messages[stepId] || 'Processing...'
+}
