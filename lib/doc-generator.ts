@@ -18,8 +18,7 @@ import {
   VerticalAlign,
 } from 'docx';
 import type { AnalysisResult, Settings, FAQ, SchemaRecommendation } from '@/types';
-import { parseMarkedContent, splitIntoHighlightSegments } from './content-differ';
-import { filterAndLimitKeywords, formatKeywordsForDocument, type KeywordWithVolume } from './keyword-processor';
+import { filterAndLimitKeywords, formatKeywordsForDocument } from './keyword-processor';
 
 // Font constant for easy updates
 const FONT = 'Poppins';
@@ -314,12 +313,12 @@ function createComparisonTable(
           createWhyCell('Added CTA, included target keyword, compelling copy'),
         ],
       }),
-      // H1 row
+      // H1 row - strip markers for clean display
       new TableRow({
         children: [
           createLabelCell('H1'),
           createContentCell(crawledData.h1[0] || 'Not set'),
-          createOptimizedCell(optimizedContent.h1),
+          createOptimizedCell(cleanMarkersForDisplay(optimizedContent.h1)),
           createWhyCell('Differentiated from title, natural keyword placement'),
         ],
       }),
@@ -573,18 +572,13 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
             spacing: { before: 400, after: 200 },
           }),
 
-          // H1 as main heading (with green highlight since it's optimized)
+          // H1 as main heading - parse [[KEYWORD:]] markers inline for green highlighting
           new Paragraph({
-            children: [
-              new TextRun({
-                text: optimizedContent.h1,
-                bold: true,
-                size: FONT_SIZES.HEADING1,
-                font: FONT,
-                color: COLORS.PRIMARY,
-                shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
-              }),
-            ],
+            children: parseKeywordMarkersToTextRuns(optimizedContent.h1, {
+              bold: true,
+              size: FONT_SIZES.HEADING1,
+              color: COLORS.PRIMARY,
+            }),
             heading: HeadingLevel.HEADING_1,
             spacing: { before: 100, after: 200 },
           }),
@@ -978,20 +972,50 @@ function parseInlineFormattingWithHighlight(text: string, isNew: boolean = false
 }
 
 /**
+ * Clean markers from text for display (removes [[KEYWORD:]], [[ADJUSTED:]], [[NEW]])
+ * Used for metadata fields where we want clean text without markers
+ */
+function cleanMarkersForDisplay(text: string): string {
+  return text
+    .replace(/\[\[KEYWORD:\s*([^\]]*)\]\]/g, '$1')
+    .replace(/\[\[ADJUSTED:\s*[^→]*→\s*([^\]]*)\]\]/g, '$1')
+    .replace(/\[\[NEW\]\]/g, '')
+    .trim();
+}
+
+/**
  * Parse structured content with [H1], [H2], [H3], [PARA], [BULLET] markers
  * Also handles legacy markdown format for backwards compatibility
  * The AI marks changes with [[KEYWORD: term]], [[ADJUSTED: old → new]], [[NEW]]
+ *
+ * IMPORTANT: This function now processes [[KEYWORD:]] markers INLINE to create
+ * green highlighted text, rather than stripping them first.
  */
 function parseContentToParagraphs(content: string, originalContent?: string): Paragraph[] {
   const paragraphs: Paragraph[] = [];
 
-  // First clean the content of any residual markdown/HTML
-  let cleanedContent = cleanContentForDocument(content);
+  // Track seen H1s to prevent duplicates
+  const seenH1s = new Set<string>();
+
+  // First clean the content of any residual markdown/HTML but KEEP the [[KEYWORD:]] markers
+  // We only clean markdown/HTML, not our custom markers
+  let processedContent = content
+    // Remove escaped markdown characters
+    .replace(/\\\*/g, '*')
+    .replace(/\\\[/g, '[')
+    .replace(/\\\]/g, ']')
+    // Remove markdown links: [text](url) -> text
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    // Remove bold/italic markdown
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    // Remove HTML tags
+    .replace(/<[^>]+>/g, '');
 
   // CRITICAL: Split structured markers onto their own lines if AI didn't add newlines
   // This handles cases where AI outputs: "[H1] Title [PARA] Content [H2] Heading"
   // and converts it to separate lines
-  cleanedContent = cleanedContent
+  processedContent = processedContent
     .replace(/\s*\[H1\]/g, '\n[H1]')
     .replace(/\s*\[H2\]/g, '\n[H2]')
     .replace(/\s*\[H3\]/g, '\n[H3]')
@@ -999,13 +1023,10 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
     .replace(/\s*\[BULLET\]/g, '\n[BULLET]')
     .trim();
 
-  // Parse the AI-marked content to get highlight segments
-  const { cleanContent, highlightSegments, changes } = parseMarkedContent(cleanedContent);
+  console.log('[doc-generator] Processing content with inline marker parsing');
 
-  console.log('[doc-generator] Parsed changes:', changes.length, 'highlight segments:', highlightSegments.length);
-
-  // Split by lines for processing
-  const lines = cleanContent.split('\n');
+  // Split by lines for processing - keep the [[KEYWORD:]] markers intact
+  const lines = processedContent.split('\n');
 
   for (const line of lines) {
     const trimmedLine = line.trim();
@@ -1019,9 +1040,17 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
     // NEW STRUCTURED FORMAT: [H1] Heading
     if (trimmedLine.startsWith('[H1]')) {
       const headingText = trimmedLine.replace('[H1]', '').trim();
+      // Check for duplicate H1 (compare clean text without markers)
+      const cleanHeading = cleanMarkersForDisplay(headingText).toLowerCase();
+      if (seenH1s.has(cleanHeading)) {
+        console.log('[doc-generator] Skipping duplicate H1:', cleanHeading);
+        continue; // Skip duplicate H1
+      }
+      seenH1s.add(cleanHeading);
+
       paragraphs.push(
         new Paragraph({
-          children: createTextRunsWithHighlighting(headingText, highlightSegments, {
+          children: createTextRunsWithHighlighting(headingText, [], {
             bold: true,
             size: FONT_SIZES.HEADING1,
             color: COLORS.PRIMARY,
@@ -1038,7 +1067,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       const headingText = trimmedLine.replace('[H2]', '').trim();
       paragraphs.push(
         new Paragraph({
-          children: createTextRunsWithHighlighting(headingText, highlightSegments, {
+          children: createTextRunsWithHighlighting(headingText, [], {
             bold: true,
             size: FONT_SIZES.HEADING2,
             color: COLORS.SECONDARY,
@@ -1055,7 +1084,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       const headingText = trimmedLine.replace('[H3]', '').trim();
       paragraphs.push(
         new Paragraph({
-          children: createTextRunsWithHighlighting(headingText, highlightSegments, {
+          children: createTextRunsWithHighlighting(headingText, [], {
             bold: true,
             size: FONT_SIZES.HEADING3,
             color: COLORS.TERTIARY,
@@ -1072,7 +1101,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       const paraText = trimmedLine.replace('[PARA]', '').trim();
       paragraphs.push(
         new Paragraph({
-          children: createTextRunsWithHighlighting(paraText, highlightSegments),
+          children: createTextRunsWithHighlighting(paraText, []),
           spacing: { after: 200 },
         })
       );
@@ -1085,7 +1114,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       paragraphs.push(
         new Paragraph({
           numbering: { reference: 'bullet-list', level: 0 },
-          children: createTextRunsWithHighlighting(bulletContent, highlightSegments),
+          children: createTextRunsWithHighlighting(bulletContent, []),
           spacing: { after: 80 },
         })
       );
@@ -1095,9 +1124,17 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
     // LEGACY FORMAT: # H1 heading (markdown)
     if (trimmedLine.startsWith('# ') && !trimmedLine.startsWith('## ')) {
       const headingText = trimmedLine.replace('# ', '');
+      // Check for duplicate H1 (compare clean text without markers)
+      const cleanHeading = cleanMarkersForDisplay(headingText).toLowerCase();
+      if (seenH1s.has(cleanHeading)) {
+        console.log('[doc-generator] Skipping duplicate H1 (markdown):', cleanHeading);
+        continue; // Skip duplicate H1
+      }
+      seenH1s.add(cleanHeading);
+
       paragraphs.push(
         new Paragraph({
-          children: createTextRunsWithHighlighting(headingText, highlightSegments, {
+          children: createTextRunsWithHighlighting(headingText, [], {
             bold: true,
             size: FONT_SIZES.HEADING1,
             color: COLORS.PRIMARY,
@@ -1114,7 +1151,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       const headingText = trimmedLine.replace('## ', '');
       paragraphs.push(
         new Paragraph({
-          children: createTextRunsWithHighlighting(headingText, highlightSegments, {
+          children: createTextRunsWithHighlighting(headingText, [], {
             bold: true,
             size: FONT_SIZES.HEADING2,
             color: COLORS.SECONDARY,
@@ -1131,7 +1168,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       const headingText = trimmedLine.replace('### ', '');
       paragraphs.push(
         new Paragraph({
-          children: createTextRunsWithHighlighting(headingText, highlightSegments, {
+          children: createTextRunsWithHighlighting(headingText, [], {
             bold: true,
             size: FONT_SIZES.HEADING3,
             color: COLORS.TERTIARY,
@@ -1149,7 +1186,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       paragraphs.push(
         new Paragraph({
           numbering: { reference: 'bullet-list', level: 0 },
-          children: createTextRunsWithHighlighting(bulletContent, highlightSegments),
+          children: createTextRunsWithHighlighting(bulletContent, []),
           spacing: { after: 80 },
         })
       );
@@ -1162,7 +1199,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       paragraphs.push(
         new Paragraph({
           numbering: { reference: 'numbered-list', level: 0 },
-          children: createTextRunsWithHighlighting(numberMatch[2], highlightSegments),
+          children: createTextRunsWithHighlighting(numberMatch[2], []),
           spacing: { after: 80 },
         })
       );
@@ -1173,7 +1210,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
     // This handles content that doesn't have any markers
     paragraphs.push(
       new Paragraph({
-        children: createTextRunsWithHighlighting(trimmedLine, highlightSegments),
+        children: createTextRunsWithHighlighting(trimmedLine, []),
         spacing: { after: 200 },
       })
     );
@@ -1183,27 +1220,112 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
 }
 
 /**
+ * Parse [[KEYWORD: text]], [[ADJUSTED: old → new]], [[NEW]] markers inline
+ * and convert them to TextRuns with green highlighting
+ */
+function parseKeywordMarkersToTextRuns(
+  content: string,
+  baseStyle: { bold?: boolean; size?: number; color?: string } = {}
+): TextRun[] {
+  const runs: TextRun[] = [];
+
+  // Regex to match all marker types:
+  // [[KEYWORD: text]] - keyword insertion
+  // [[ADJUSTED: old → new]] - adjusted text (show new part)
+  // [[NEW]] - new content marker (standalone)
+  const markerRegex = /\[\[(KEYWORD|ADJUSTED):\s*([^\]]*)\]\]|\[\[(NEW)\]\]/g;
+
+  let lastIndex = 0;
+  let match;
+
+  while ((match = markerRegex.exec(content)) !== null) {
+    // Add text before the marker (not highlighted)
+    if (match.index > lastIndex) {
+      const beforeText = content.substring(lastIndex, match.index);
+      if (beforeText) {
+        runs.push(new TextRun({
+          text: cleanMarkdownEscapes(beforeText),
+          font: FONT,
+          size: baseStyle.size || FONT_SIZES.BODY,
+          bold: baseStyle.bold,
+          color: baseStyle.color,
+        }));
+      }
+    }
+
+    const markerType = match[1] || match[3]; // KEYWORD, ADJUSTED, or NEW
+    const markerContent = match[2] || ''; // The text inside the marker
+
+    if (markerType === 'KEYWORD' && markerContent) {
+      // Highlighted keyword insertion
+      runs.push(new TextRun({
+        text: cleanMarkdownEscapes(markerContent.trim()),
+        font: FONT,
+        size: baseStyle.size || FONT_SIZES.BODY,
+        bold: baseStyle.bold,
+        color: baseStyle.color,
+        shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
+      }));
+    } else if (markerType === 'ADJUSTED' && markerContent) {
+      // For adjusted text, show the new version highlighted
+      // Format is "old → new", we want just the "new" part
+      const parts = markerContent.split('→').map(s => s.trim());
+      const newText = parts.length > 1 ? parts[1] : markerContent;
+      runs.push(new TextRun({
+        text: cleanMarkdownEscapes(newText),
+        font: FONT,
+        size: baseStyle.size || FONT_SIZES.BODY,
+        bold: baseStyle.bold,
+        color: baseStyle.color,
+        shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
+      }));
+    } else if (markerType === 'NEW') {
+      // NEW marker - just a standalone marker, skip it (the content after is what's new)
+      // Don't add anything - the [[NEW]] marker is informational
+    }
+
+    lastIndex = match.index + match[0].length;
+  }
+
+  // Add any remaining text after the last marker
+  if (lastIndex < content.length) {
+    const afterText = content.substring(lastIndex);
+    if (afterText) {
+      runs.push(new TextRun({
+        text: cleanMarkdownEscapes(afterText),
+        font: FONT,
+        size: baseStyle.size || FONT_SIZES.BODY,
+        bold: baseStyle.bold,
+        color: baseStyle.color,
+      }));
+    }
+  }
+
+  // If no markers found and no runs created, return the whole content as a single run
+  if (runs.length === 0) {
+    runs.push(new TextRun({
+      text: cleanMarkdownEscapes(content),
+      font: FONT,
+      size: baseStyle.size || FONT_SIZES.BODY,
+      bold: baseStyle.bold,
+      color: baseStyle.color,
+    }));
+  }
+
+  return runs;
+}
+
+/**
  * Create TextRun array with inline highlighting for marked segments
+ * Uses the new inline marker parsing for proper [[KEYWORD:]] handling
  */
 function createTextRunsWithHighlighting(
   text: string,
   highlightSegments: string[],
   baseStyle: { bold?: boolean; size?: number; color?: string } = {}
 ): TextRun[] {
-  // Clean markdown escapes first
-  const cleanedText = cleanMarkdownEscapes(text);
-
-  // Split text into segments based on what should be highlighted
-  const segments = splitIntoHighlightSegments(cleanedText, highlightSegments);
-
-  return segments.map(segment => new TextRun({
-    text: segment.text,
-    font: FONT,
-    size: baseStyle.size || FONT_SIZES.BODY,
-    bold: baseStyle.bold,
-    color: baseStyle.color,
-    shading: segment.highlight ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
-  }));
+  // Use the new inline marker parser which handles [[KEYWORD:]], [[ADJUSTED:]], [[NEW]] properly
+  return parseKeywordMarkersToTextRuns(text, baseStyle);
 }
 
 function generateFAQParagraphs(faqs: FAQ[], highlightAsNew: boolean = false): Paragraph[] {
@@ -1517,7 +1639,7 @@ function createMetadataTable(
       ],
     }),
 
-    // New H1
+    // New H1 - strip any [[KEYWORD:]] markers for clean display
     new TableRow({
       children: [
         new TableCell({
@@ -1537,7 +1659,7 @@ function createMetadataTable(
             new Paragraph({
               children: [
                 new TextRun({
-                  text: optimizedContent.h1,
+                  text: cleanMarkersForDisplay(optimizedContent.h1),
                   size: 22,
                   font: FONT,
                   shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
