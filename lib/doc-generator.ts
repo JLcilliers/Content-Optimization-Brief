@@ -985,7 +985,18 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
   const paragraphs: Paragraph[] = [];
 
   // First clean the content of any residual markdown/HTML
-  const cleanedContent = cleanContentForDocument(content);
+  let cleanedContent = cleanContentForDocument(content);
+
+  // CRITICAL: Split structured markers onto their own lines if AI didn't add newlines
+  // This handles cases where AI outputs: "[H1] Title [PARA] Content [H2] Heading"
+  // and converts it to separate lines
+  cleanedContent = cleanedContent
+    .replace(/\s*\[H1\]/g, '\n[H1]')
+    .replace(/\s*\[H2\]/g, '\n[H2]')
+    .replace(/\s*\[H3\]/g, '\n[H3]')
+    .replace(/\s*\[PARA\]/g, '\n[PARA]')
+    .replace(/\s*\[BULLET\]/g, '\n[BULLET]')
+    .trim();
 
   // Parse the AI-marked content to get highlight segments
   const { cleanContent, highlightSegments, changes } = parseMarkedContent(cleanedContent);
