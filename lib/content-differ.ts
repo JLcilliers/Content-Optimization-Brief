@@ -76,8 +76,12 @@ export function parseMarkedContent(markedContent: string): ParsedContent {
   // Clean up any remaining double brackets
   cleanContent = cleanContent.replace(/\[\[|\]\]/g, '');
 
-  // Clean up extra whitespace
-  cleanContent = cleanContent.replace(/\s+/g, ' ').trim();
+  // Clean up extra whitespace BUT PRESERVE NEWLINES
+  // Replace multiple spaces with single space (not newlines)
+  cleanContent = cleanContent.replace(/[^\S\n]+/g, ' ');
+  // Clean up multiple consecutive newlines to max 2
+  cleanContent = cleanContent.replace(/\n{3,}/g, '\n\n');
+  cleanContent = cleanContent.trim();
 
   return {
     cleanContent,
