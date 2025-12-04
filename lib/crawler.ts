@@ -31,8 +31,51 @@ export async function crawlPage(url: string): Promise<CrawledData> {
   try {
     // Firecrawl SDK v4.x uses 'scrape' method (v2 API)
     // The v2 API returns the document directly (not wrapped in success/data)
+    // Exclude navigation, footer, header, and other non-content elements
     const scrapeResult = await app.scrape(url, {
       formats: ['markdown', 'html'],
+      excludeTags: [
+        'nav',
+        'footer',
+        'header',
+        'aside',
+        'script',
+        'style',
+        'noscript',
+        'iframe',
+        'form',
+        '.nav',
+        '.navbar',
+        '.navigation',
+        '.menu',
+        '.footer',
+        '.header',
+        '.sidebar',
+        '.widget',
+        '.breadcrumb',
+        '.breadcrumbs',
+        '.social-share',
+        '.social-links',
+        '.cookie-notice',
+        '.cookie-banner',
+        '.popup',
+        '.modal',
+        '.advertisement',
+        '.ad',
+        '.ads',
+        '#nav',
+        '#navbar',
+        '#navigation',
+        '#menu',
+        '#footer',
+        '#header',
+        '#sidebar',
+        '[role="navigation"]',
+        '[role="banner"]',
+        '[role="contentinfo"]',
+        '[role="complementary"]',
+      ],
+      onlyMainContent: true,
     }) as FirecrawlDocument;
 
     // v2 API throws on error, so if we get here it was successful

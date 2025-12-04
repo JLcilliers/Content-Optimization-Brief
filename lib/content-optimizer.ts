@@ -15,6 +15,7 @@ export async function optimizeContent(
   const client = new Anthropic({ apiKey: anthropicApiKey });
 
   // The key change: Prompt focuses on PRESERVING original content with MINIMAL changes
+  // Output uses structured markers for clean document generation
   const systemPrompt = `You are an SEO content optimizer. Your job is to make MINIMAL, SURGICAL changes to existing content to improve SEO rankings.
 
 ## CRITICAL RULES - READ CAREFULLY:
@@ -24,6 +25,7 @@ export async function optimizeContent(
 3. **DO NOT change the content structure** - keep the same sections and flow
 4. **DO NOT change the brand voice** or writing style
 5. **Make surgical, targeted changes** - not wholesale rewrites
+6. **OUTPUT PLAIN TEXT ONLY** - no markdown, no HTML, no special formatting
 
 ## WHAT YOU CAN CHANGE:
 ✅ Insert a target keyword naturally into an existing sentence
@@ -40,19 +42,40 @@ export async function optimizeContent(
 ❌ Change the brand's voice, tone, or style
 ❌ Restructure the page layout
 
-## OUTPUT FORMAT:
-Return the optimized content with change markers:
-- Use [[KEYWORD: term]] to mark where you inserted a keyword
-- Use [[ADJUSTED: original → new]] for slight phrase adjustments
-- Use [[NEW]] for any new sentences added
-- Use [[NEW FAQ SECTION]] to mark FAQs you've added
+## OUTPUT FORMAT - VERY IMPORTANT:
 
-Example of correct optimization:
-ORIGINAL: "We have been protecting educators for over 30 years."
-OPTIMIZED: "We have been protecting educators with [[KEYWORD: professional liability insurance]] for over 30 years."
+For the fullContent field, use ONLY these structured markers (NO markdown, NO HTML):
 
-ORIGINAL: "Our team helps teachers every day."
-OPTIMIZED: "Our team helps [[ADJUSTED: teachers → educators and teachers]] with [[KEYWORD: liability coverage]] every day."
+**Headings:**
+- [H1] Heading text here
+- [H2] Subheading text here
+- [H3] Sub-subheading text here
+
+**Paragraphs:**
+- [PARA] Your paragraph text here. Each paragraph should be on its own line with [PARA] prefix.
+
+**Bullet points:**
+- [BULLET] First bullet point
+- [BULLET] Second bullet point
+
+**Change markers (embed within text):**
+- [[KEYWORD: term]] - where you inserted a keyword
+- [[ADJUSTED: original → new]] - for phrase adjustments
+- [[NEW]] - for new sentences
+
+Example of correct structured output:
+[H1] Comprehensive [[KEYWORD: Professional Liability Insurance]] for Educators
+[PARA] We have been protecting educators with [[KEYWORD: professional liability insurance]] for over 30 years. Our dedicated team understands the unique challenges you face. [[NEW]] Every policy includes comprehensive coverage for classroom incidents.
+[H2] Why Choose Our [[KEYWORD: Teacher Insurance]] Coverage
+[PARA] Our team helps [[ADJUSTED: teachers → educators and teachers]] with [[KEYWORD: liability coverage]] every day.
+[BULLET] Coverage for legal defense costs
+[BULLET] Protection against student claims
+[BULLET] 24/7 support hotline
+
+DO NOT use:
+- Markdown (**bold**, *italic*, [links](url), # headings)
+- HTML tags (<p>, <h1>, <strong>, etc.)
+- Escaped characters (\\*, \\[, etc.)
 
 Content Tone: ${settings.tone}
 Brand Name: ${settings.brandName || 'The business'}`;
@@ -86,7 +109,7 @@ NLP Terms (sprinkle naturally): ${keywords.nlpTerms.slice(0, 15).join(', ') || '
   "metaTitle": "Optimized title (50-60 chars, add primary keyword to existing title style if possible${settings.brandName ? `, keep " | ${settings.brandName}" at end` : ''})",
   "metaDescription": "Keep similar to original but add primary keyword and a CTA (150-160 chars)",
   "h1": "Similar to original H1 but with primary keyword added naturally",
-  "fullContent": "The ORIGINAL content with MINIMAL keyword insertions marked. Keep 90%+ identical to original.",
+  "fullContent": "Structured content using [H1], [H2], [H3], [PARA], [BULLET] markers. Keep 90%+ identical to original. NO MARKDOWN OR HTML.",
   "changesSummary": "Brief list of the specific changes you made",
   "faqs": [
     {"question": "Relevant FAQ 1?", "answer": "Answer based on page content"},
@@ -95,7 +118,14 @@ NLP Terms (sprinkle naturally): ${keywords.nlpTerms.slice(0, 15).join(', ') || '
   ]
 }
 
-CRITICAL: The fullContent should be recognizably the SAME content as the original, just with keywords inserted. If you rewrite it, you have failed the task.`;
+CRITICAL REQUIREMENTS:
+1. The fullContent should be recognizably the SAME content as the original, just with keywords inserted
+2. Use ONLY the structured markers: [H1], [H2], [H3], [PARA], [BULLET]
+3. NO markdown (no **, *, #, [], links, etc.)
+4. NO HTML tags
+5. Each paragraph MUST start with [PARA]
+6. Each heading MUST start with [H1], [H2], or [H3]
+7. Each bullet point MUST start with [BULLET]`;
 
   console.log('[content-optimizer] Sending preservation-focused prompt to Claude...');
 

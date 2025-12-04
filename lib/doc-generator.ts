@@ -655,17 +655,65 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
 type InlineElement = TextRun | ExternalHyperlink;
 
 /**
- * Clean up escaped markdown and normalize text
+ * Comprehensive content cleaning for Word document output
+ * Strips ALL markdown/HTML artifacts that shouldn't appear in final document
  */
-function cleanMarkdownEscapes(text: string): string {
-  return text
+function cleanContentForDocument(text: string): string {
+  let cleaned = text;
+
+  // 1. Remove escaped markdown characters
+  cleaned = cleaned
     .replace(/\\\*/g, '*')      // \* -> *
     .replace(/\\\[/g, '[')      // \[ -> [
     .replace(/\\\]/g, ']')      // \] -> ]
     .replace(/\\\(/g, '(')      // \( -> (
     .replace(/\\\)/g, ')')      // \) -> )
     .replace(/\\"/g, '"')       // \" -> "
-    .replace(/\\_/g, '_');      // \_ -> _
+    .replace(/\\_/g, '_')       // \_ -> _
+    .replace(/\\#/g, '#')       // \# -> #
+    .replace(/\\>/g, '>')       // \> -> >
+    .replace(/\\-/g, '-')       // \- -> -
+    .replace(/\\`/g, '`');      // \` -> `
+
+  // 2. Convert markdown links to plain text: [text](url) -> text
+  cleaned = cleaned.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+
+  // 3. Remove bold/italic markdown: **text** or *text* -> text
+  cleaned = cleaned.replace(/\*\*([^*]+)\*\*/g, '$1');  // **bold**
+  cleaned = cleaned.replace(/\*([^*]+)\*/g, '$1');       // *italic*
+  cleaned = cleaned.replace(/__([^_]+)__/g, '$1');       // __bold__
+  cleaned = cleaned.replace(/_([^_]+)_/g, '$1');         // _italic_
+
+  // 4. Remove inline code: `code` -> code
+  cleaned = cleaned.replace(/`([^`]+)`/g, '$1');
+
+  // 5. Remove HTML tags that might slip through
+  cleaned = cleaned.replace(/<[^>]+>/g, '');
+
+  // 6. Remove markdown heading prefixes that weren't properly parsed
+  // Only remove if at start of line (after processing)
+  cleaned = cleaned.replace(/^#{1,6}\s+/gm, '');
+
+  // 7. Remove markdown horizontal rules
+  cleaned = cleaned.replace(/^[-*_]{3,}$/gm, '');
+
+  // 8. Remove markdown blockquote prefix
+  cleaned = cleaned.replace(/^>\s*/gm, '');
+
+  // 9. Clean up multiple spaces and normalize whitespace
+  cleaned = cleaned.replace(/  +/g, ' ');
+
+  // 10. Clean up multiple newlines (keep max 2)
+  cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
+
+  return cleaned.trim();
+}
+
+/**
+ * Clean up escaped markdown and normalize text (legacy function for compatibility)
+ */
+function cleanMarkdownEscapes(text: string): string {
+  return cleanContentForDocument(text);
 }
 
 /**
@@ -929,28 +977,110 @@ function parseInlineFormattingWithHighlight(text: string, isNew: boolean = false
 }
 
 /**
- * Parse content with AI markers and create paragraphs with inline highlighting
+ * Parse structured content with [H1], [H2], [H3], [PARA], [BULLET] markers
+ * Also handles legacy markdown format for backwards compatibility
  * The AI marks changes with [[KEYWORD: term]], [[ADJUSTED: old → new]], [[NEW]]
  */
 function parseContentToParagraphs(content: string, originalContent?: string): Paragraph[] {
   const paragraphs: Paragraph[] = [];
 
+  // First clean the content of any residual markdown/HTML
+  const cleanedContent = cleanContentForDocument(content);
+
   // Parse the AI-marked content to get highlight segments
-  const { cleanContent, highlightSegments, changes } = parseMarkedContent(content);
+  const { cleanContent, highlightSegments, changes } = parseMarkedContent(cleanedContent);
 
   console.log('[doc-generator] Parsed changes:', changes.length, 'highlight segments:', highlightSegments.length);
 
+  // Split by lines for processing
   const lines = cleanContent.split('\n');
 
   for (const line of lines) {
     const trimmedLine = line.trim();
 
     if (!trimmedLine) {
+      // Add spacing paragraph for empty lines
       paragraphs.push(new Paragraph({ spacing: { after: 100 } }));
       continue;
     }
 
-    // H1 heading (#)
+    // NEW STRUCTURED FORMAT: [H1] Heading
+    if (trimmedLine.startsWith('[H1]')) {
+      const headingText = trimmedLine.replace('[H1]', '').trim();
+      paragraphs.push(
+        new Paragraph({
+          children: createTextRunsWithHighlighting(headingText, highlightSegments, {
+            bold: true,
+            size: FONT_SIZES.HEADING1,
+            color: COLORS.PRIMARY,
+          }),
+          heading: HeadingLevel.HEADING_1,
+          spacing: { before: 400, after: 200 },
+        })
+      );
+      continue;
+    }
+
+    // NEW STRUCTURED FORMAT: [H2] Subheading
+    if (trimmedLine.startsWith('[H2]')) {
+      const headingText = trimmedLine.replace('[H2]', '').trim();
+      paragraphs.push(
+        new Paragraph({
+          children: createTextRunsWithHighlighting(headingText, highlightSegments, {
+            bold: true,
+            size: FONT_SIZES.HEADING2,
+            color: COLORS.SECONDARY,
+          }),
+          heading: HeadingLevel.HEADING_2,
+          spacing: { before: 300, after: 150 },
+        })
+      );
+      continue;
+    }
+
+    // NEW STRUCTURED FORMAT: [H3] Sub-subheading
+    if (trimmedLine.startsWith('[H3]')) {
+      const headingText = trimmedLine.replace('[H3]', '').trim();
+      paragraphs.push(
+        new Paragraph({
+          children: createTextRunsWithHighlighting(headingText, highlightSegments, {
+            bold: true,
+            size: FONT_SIZES.HEADING3,
+            color: COLORS.TERTIARY,
+          }),
+          heading: HeadingLevel.HEADING_3,
+          spacing: { before: 200, after: 100 },
+        })
+      );
+      continue;
+    }
+
+    // NEW STRUCTURED FORMAT: [PARA] Paragraph text
+    if (trimmedLine.startsWith('[PARA]')) {
+      const paraText = trimmedLine.replace('[PARA]', '').trim();
+      paragraphs.push(
+        new Paragraph({
+          children: createTextRunsWithHighlighting(paraText, highlightSegments),
+          spacing: { after: 200 },
+        })
+      );
+      continue;
+    }
+
+    // NEW STRUCTURED FORMAT: [BULLET] Bullet point
+    if (trimmedLine.startsWith('[BULLET]')) {
+      const bulletContent = trimmedLine.replace('[BULLET]', '').trim();
+      paragraphs.push(
+        new Paragraph({
+          numbering: { reference: 'bullet-list', level: 0 },
+          children: createTextRunsWithHighlighting(bulletContent, highlightSegments),
+          spacing: { after: 80 },
+        })
+      );
+      continue;
+    }
+
+    // LEGACY FORMAT: # H1 heading (markdown)
     if (trimmedLine.startsWith('# ') && !trimmedLine.startsWith('## ')) {
       const headingText = trimmedLine.replace('# ', '');
       paragraphs.push(
@@ -967,7 +1097,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       continue;
     }
 
-    // H2 heading (##)
+    // LEGACY FORMAT: ## H2 heading (markdown)
     if (trimmedLine.startsWith('## ') && !trimmedLine.startsWith('### ')) {
       const headingText = trimmedLine.replace('## ', '');
       paragraphs.push(
@@ -984,7 +1114,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       continue;
     }
 
-    // H3 heading (###)
+    // LEGACY FORMAT: ### H3 heading (markdown)
     if (trimmedLine.startsWith('### ')) {
       const headingText = trimmedLine.replace('### ', '');
       paragraphs.push(
@@ -1001,7 +1131,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       continue;
     }
 
-    // Bullet point
+    // LEGACY FORMAT: Bullet point (- or *)
     if (trimmedLine.startsWith('- ') || trimmedLine.startsWith('* ')) {
       const bulletContent = trimmedLine.substring(2);
       paragraphs.push(
@@ -1014,7 +1144,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       continue;
     }
 
-    // Numbered list
+    // LEGACY FORMAT: Numbered list
     const numberMatch = trimmedLine.match(/^(\d+)\.\s(.+)/);
     if (numberMatch) {
       paragraphs.push(
@@ -1027,11 +1157,12 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       continue;
     }
 
-    // Regular paragraph
+    // Regular paragraph (no marker - treat as paragraph)
+    // This handles content that doesn't have any markers
     paragraphs.push(
       new Paragraph({
         children: createTextRunsWithHighlighting(trimmedLine, highlightSegments),
-        spacing: { after: 150 },
+        spacing: { after: 200 },
       })
     );
   }

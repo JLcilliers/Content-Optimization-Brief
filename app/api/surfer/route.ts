@@ -154,6 +154,12 @@ function isValidKeyword(term: string): boolean {
   return true;
 }
 
+// Maximum keyword limits to prevent overwhelming the AI
+const MAX_PRIMARY_KEYWORDS = 5;
+const MAX_SECONDARY_KEYWORDS = 10;
+const MAX_NLP_TERMS = 15;
+const MAX_QUESTIONS = 5;
+
 // Convert SurferSEO report to KeywordData format for the main analyzer
 function convertToKeywordData(surferReport: SurferSEOReport): KeywordData {
   // Convert SurferSEO report to KeywordData format
@@ -196,15 +202,24 @@ function convertToKeywordData(surferReport: SurferSEOReport): KeywordData {
     }
   });
 
-  // Combine all keywords
-  const all = [...new Set([...primary, ...secondary, ...nlpTerms, ...questions, ...longTail])];
+  // Apply strict limits to prevent overwhelming the AI optimizer
+  const limitedPrimary = primary.slice(0, MAX_PRIMARY_KEYWORDS);
+  const limitedSecondary = secondary.slice(0, MAX_SECONDARY_KEYWORDS);
+  const limitedNlp = nlpTerms.slice(0, MAX_NLP_TERMS);
+  const limitedQuestions = questions.slice(0, MAX_QUESTIONS);
+  const limitedLongTail = longTail.slice(0, 5);
+
+  // Combine all keywords (limited)
+  const all = [...new Set([...limitedPrimary, ...limitedSecondary, ...limitedNlp, ...limitedQuestions, ...limitedLongTail])];
+
+  console.log(`[Surfer API] Keyword limits applied: ${limitedPrimary.length} primary, ${limitedSecondary.length} secondary, ${limitedNlp.length} NLP`);
 
   return {
-    primary: primary.slice(0, 5),
-    secondary: secondary.slice(0, 15),
-    nlpTerms: nlpTerms.slice(0, 20),
-    questions: questions.slice(0, 10),
-    longTail: longTail.slice(0, 10),
+    primary: limitedPrimary,
+    secondary: limitedSecondary,
+    nlpTerms: limitedNlp,
+    questions: limitedQuestions,
+    longTail: limitedLongTail,
     all,
   };
 }
