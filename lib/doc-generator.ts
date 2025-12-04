@@ -427,8 +427,24 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
   resetH1Tracking();
 
   const { analysisResult, settings, clientName, pageName } = options;
-  const { crawledData, optimizedContent, keywords } = analysisResult;
-  console.log('[doc-generator] Content length:', optimizedContent?.fullContent?.length || 0);
+  const { crawledData, optimizedContent: rawOptimizedContent, keywords } = analysisResult;
+  console.log('[doc-generator] Raw content length:', rawOptimizedContent?.fullContent?.length || 0);
+
+  // =====================================================
+  // CRITICAL: CLEAN CONTENT AT ENTRY POINT
+  // This MUST happen BEFORE any other processing!
+  // =====================================================
+  console.log('[doc-generator] Applying masterContentCleaner to fullContent...');
+  const cleanedFullContent = masterContentCleaner(rawOptimizedContent?.fullContent || '');
+  const cleanedH1 = masterContentCleaner(rawOptimizedContent?.h1 || '');
+
+  // Create a new optimizedContent object with cleaned content
+  const optimizedContent = {
+    ...rawOptimizedContent,
+    fullContent: cleanedFullContent,
+    h1: cleanedH1,
+  };
+  console.log('[doc-generator] Cleaned content length:', optimizedContent.fullContent.length);
 
   const doc = new Document({
     numbering: numberingConfig,
@@ -670,13 +686,14 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
             spacing: { before: 400, after: 200 },
           }),
 
-          // H1 as main heading - parse [[KEYWORD:]] markers inline for green highlighting
+          // H1 as main heading - uses <<<GREEN>>>...<<</GREEN>>> markers from masterContentCleaner
           // IMPORTANT: Register this H1 to prevent duplicates in fullContent
           ...(() => {
             // Track this H1 so it won't be duplicated if it appears in fullContent
             isDuplicateH1(optimizedContent.h1);
             return [new Paragraph({
-              children: parseKeywordMarkersToTextRuns(optimizedContent.h1, {
+              // Content has been cleaned by masterContentCleaner - use GREEN marker parser
+              children: parseGreenMarkersToTextRuns(optimizedContent.h1, {
                 bold: true,
                 size: FONT_SIZES.HEADING1,
                 color: COLORS.PRIMARY,
@@ -804,7 +821,10 @@ function cleanContentForDocument(text: string): string {
   // 10. Clean up multiple newlines (keep max 2)
   cleaned = cleaned.replace(/\n{3,}/g, '\n\n');
 
-  return cleaned.trim();
+  // IMPORTANT: Do NOT trim here - we need to preserve leading/trailing spaces
+  // for proper spacing between TextRuns when parsing [[KEYWORD:]] markers.
+  // The calling code is responsible for trimming where appropriate.
+  return cleaned;
 }
 
 /**
@@ -1313,75 +1333,180 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
 }
 
 /**
- * Pre-process content to ensure proper spacing around [[KEYWORD:]] markers
- * This fixes cases where AI outputs markers without spaces:
- * - "years,[[KEYWORD: AIM Insurance]]has" → "years, [[KEYWORD: AIM Insurance]] has"
- * - "from[[KEYWORD: AIM]]today" → "from [[KEYWORD: AIM]] today"
+ * MASTER CONTENT CLEANER - NUCLEAR OPTION
  *
- * CRITICAL: This function must be called BEFORE parsing the markers!
+ * This function MUST be called at the ENTRY POINT of document generation,
+ * BEFORE any other processing. It handles ALL content cleaning in a single pass.
+ *
+ * Handles:
+ * 1. PHASE 1: Convert ALL structural markers to normalized format (handles bracket-less variants)
+ * 2. PHASE 2: Fix spacing around [[KEYWORD:...]] and [[ADJUSTED:...]] markers
+ * 3. PHASE 3: Convert [[KEYWORD:...]] to <<<GREEN>>>...<<</GREEN>>> for easier parsing
+ * 4. PHASE 4: Cleanup orphan URLs, images, double spaces
  */
-function ensureSpacesAroundMarkers(content: string): string {
-  let result = content;
+function masterContentCleaner(rawContent: string): string {
+  console.log('\n========================================');
+  console.log('[masterContentCleaner] STARTING CONTENT CLEANING');
+  console.log('========================================');
+  console.log('[masterContentCleaner] Input length:', rawContent.length);
+  console.log('[masterContentCleaner] Input first 300 chars:', rawContent.substring(0, 300));
 
-  // STEP 1: Add space BEFORE [[ marker
-  // Match any word character or comma before [[
-  result = result.replace(/(\w)(\[\[)/g, '$1 $2');
-  result = result.replace(/,(\[\[)/g, ', $1');
-  result = result.replace(/\.(\[\[)/g, '. $1');
-  result = result.replace(/:(\[\[)/g, ': $1');
-  result = result.replace(/;(\[\[)/g, '; $1');
-  result = result.replace(/\)(\[\[)/g, ') $1');
+  let content = rawContent;
 
-  // STEP 2: Add space AFTER ]] marker
-  // Match ]] followed by any word character
-  result = result.replace(/(\]\])(\w)/g, '$1 $2');
-  // Also handle ]] followed by opening parenthesis
-  result = result.replace(/(\]\])(\()/g, '$1 $2');
+  // ============================================
+  // PHASE 1: NORMALIZE ALL STRUCTURAL MARKERS
+  // Convert BOTH bracket and non-bracket versions to consistent format
+  // ============================================
+  console.log('\n[masterContentCleaner] PHASE 1: Normalizing structural markers...');
 
-  // STEP 3: Clean up any double spaces
-  result = result.replace(/  +/g, ' ');
+  // Handle H1, H2, H3 - convert bracket-less to bracketed format
+  // Match "H1 " at start of line or after whitespace (not inside words)
+  content = content.replace(/^H1\s+/gm, '[H1] ');
+  content = content.replace(/^H2\s+/gm, '[H2] ');
+  content = content.replace(/^H3\s+/gm, '[H3] ');
 
-  // Debug: Log if any markers found without proper spacing
-  const badPatternBefore = /\w\[\[/g;
-  const badPatternAfter = /\]\]\w/g;
-  if (badPatternBefore.test(result) || badPatternAfter.test(result)) {
-    console.log('[doc-generator] WARNING: Some markers may still lack proper spacing');
-  }
+  // Also handle mid-line cases: " H1 ", " H2 ", etc.
+  content = content.replace(/\s+H1\s+/g, '\n[H1] ');
+  content = content.replace(/\s+H2\s+/g, '\n[H2] ');
+  content = content.replace(/\s+H3\s+/g, '\n[H3] ');
 
-  return result;
+  // Handle PARA - convert to empty string (paragraph structure is implicit)
+  content = content.replace(/^\[?PARA\]?\s*/gim, '');
+  content = content.replace(/\s+PARA\s+/g, ' ');
+
+  // Handle BULLET - convert to bullet point symbol
+  content = content.replace(/^\[?BULLET\]?\s*/gim, '• ');
+  content = content.replace(/\s+BULLET\s+/g, '\n• ');
+
+  // Remove [[NEW...]] markers - they're just indicators, not content
+  content = content.replace(/\[\[NEW[^\]]*\]\]\s*/gi, '');
+  content = content.replace(/\[\[NEW\]\]\s*/gi, '');
+
+  console.log('[masterContentCleaner] After PHASE 1 (first 300 chars):', content.substring(0, 300));
+
+  // ============================================
+  // PHASE 2: FIX SPACING AROUND [[KEYWORD:...]] AND [[ADJUSTED:...]] MARKERS
+  // ============================================
+  console.log('\n[masterContentCleaner] PHASE 2: Fixing spacing around keyword markers...');
+
+  // Add space BEFORE marker if preceded by word character
+  content = content.replace(/(\w)(\[\[(?:KEYWORD|ADJUSTED):)/g, '$1 $2');
+
+  // Add space AFTER marker if followed by word character
+  content = content.replace(/(\]\])(\w)/g, '$1 $2');
+
+  // Handle special cases
+  content = content.replace(/,(\[\[(?:KEYWORD|ADJUSTED):)/g, ', $1');  // comma before marker
+  content = content.replace(/'(\[\[(?:KEYWORD|ADJUSTED):)/g, "' $1");  // apostrophe before marker
+  content = content.replace(/"(\[\[(?:KEYWORD|ADJUSTED):)/g, '" $1'); // quote before marker
+
+  console.log('[masterContentCleaner] After PHASE 2 (first 300 chars):', content.substring(0, 300));
+
+  // ============================================
+  // PHASE 3: CONVERT [[KEYWORD:...]] TO <<<GREEN>>>...<<</GREEN>>>
+  // This makes parsing MUCH easier later
+  // ============================================
+  console.log('\n[masterContentCleaner] PHASE 3: Converting keyword markers to GREEN format...');
+
+  // [[KEYWORD: text]] -> <<<GREEN>>>text<<</GREEN>>>
+  content = content.replace(/\[\[KEYWORD:\s*([^\]]+)\]\]/gi, '<<<GREEN>>>$1<<</GREEN>>>');
+
+  // [[ADJUSTED: old → new]] -> <<<GREEN>>>new<<</GREEN>>>
+  // We want the NEW text (after the arrow)
+  content = content.replace(/\[\[ADJUSTED:\s*[^→]*→\s*([^\]]+)\]\]/gi, '<<<GREEN>>>$1<<</GREEN>>>');
+
+  // Handle ADJUSTED without arrow (fallback - take entire content)
+  content = content.replace(/\[\[ADJUSTED:\s*([^\]]+)\]\]/gi, '<<<GREEN>>>$1<<</GREEN>>>');
+
+  console.log('[masterContentCleaner] After PHASE 3 (first 300 chars):', content.substring(0, 300));
+
+  // Count GREEN markers for verification
+  const greenCount = (content.match(/<<<GREEN>>>/g) || []).length;
+  console.log('[masterContentCleaner] GREEN markers created:', greenCount);
+
+  // ============================================
+  // PHASE 4: CLEANUP
+  // ============================================
+  console.log('\n[masterContentCleaner] PHASE 4: Final cleanup...');
+
+  // Remove orphan URLs that appear on their own line
+  content = content.replace(/^\(https?:\/\/[^)]+\)\s*$/gm, '');
+  content = content.replace(/^https?:\/\/[^\s]+\s*$/gm, '');
+
+  // Remove markdown image syntax: ![alt](url) or ![alt]
+  content = content.replace(/!\[[^\]]*\]\([^)]*\)/g, '');
+  content = content.replace(/!\[[^\]]*\]/g, '');
+
+  // Clean up multiple spaces
+  content = content.replace(/  +/g, ' ');
+
+  // Clean up multiple newlines (max 2)
+  content = content.replace(/\n{3,}/g, '\n\n');
+
+  // Trim lines
+  content = content.split('\n').map(line => line.trim()).join('\n');
+
+  console.log('[masterContentCleaner] After PHASE 4 (first 300 chars):', content.substring(0, 300));
+
+  // ============================================
+  // VERIFICATION: Check for remaining issues
+  // ============================================
+  console.log('\n[masterContentCleaner] VERIFICATION...');
+
+  // Check for any raw markers that slipped through
+  const rawH1 = content.match(/(?:^|\s)H1\s/gm);
+  const rawH2 = content.match(/(?:^|\s)H2\s/gm);
+  const rawH3 = content.match(/(?:^|\s)H3\s/gm);
+  const rawPARA = content.match(/PARA\s/gi);
+  const rawBULLET = content.match(/(?:^|\s)BULLET\s/gmi);
+  const rawKeyword = content.match(/\[\[KEYWORD:/gi);
+  const rawAdjusted = content.match(/\[\[ADJUSTED:/gi);
+
+  if (rawH1) console.log('[masterContentCleaner] WARNING: Raw H1 markers found:', rawH1.length);
+  if (rawH2) console.log('[masterContentCleaner] WARNING: Raw H2 markers found:', rawH2.length);
+  if (rawH3) console.log('[masterContentCleaner] WARNING: Raw H3 markers found:', rawH3.length);
+  if (rawPARA) console.log('[masterContentCleaner] WARNING: Raw PARA markers found:', rawPARA.length);
+  if (rawBULLET) console.log('[masterContentCleaner] WARNING: Raw BULLET markers found:', rawBULLET.length);
+  if (rawKeyword) console.log('[masterContentCleaner] WARNING: Unconverted KEYWORD markers found:', rawKeyword.length);
+  if (rawAdjusted) console.log('[masterContentCleaner] WARNING: Unconverted ADJUSTED markers found:', rawAdjusted.length);
+
+  // Check GREEN marker integrity
+  const greenOpens = (content.match(/<<<GREEN>>>/g) || []).length;
+  const greenCloses = (content.match(/<<\/GREEN>>>/g) || []).length;
+  console.log('[masterContentCleaner] GREEN opens:', greenOpens, 'GREEN closes:', greenCloses);
+
+  console.log('\n========================================');
+  console.log('[masterContentCleaner] CLEANING COMPLETE');
+  console.log('[masterContentCleaner] Output length:', content.length);
+  console.log('========================================\n');
+
+  return content;
 }
 
 /**
- * Parse [[KEYWORD: text]], [[ADJUSTED: old → new]], [[NEW]] markers inline
- * and convert them to TextRuns with green highlighting
- *
- * IMPORTANT: Pre-processes content to ensure proper spacing around markers
+ * Parse content with <<<GREEN>>>...<<</GREEN>>> markers into TextRuns
+ * This is the NEW parser that works with masterContentCleaner output
  */
-function parseKeywordMarkersToTextRuns(
+function parseGreenMarkersToTextRuns(
   content: string,
   baseStyle: { bold?: boolean; size?: number; color?: string } = {}
 ): TextRun[] {
   const runs: TextRun[] = [];
 
-  // CRITICAL: Pre-process to ensure spaces around markers BEFORE parsing
-  const processedContent = ensureSpacesAroundMarkers(content);
-
-  // Regex to match all marker types:
-  // [[KEYWORD: text]] - keyword insertion
-  // [[ADJUSTED: old → new]] - adjusted text (show new part)
-  // [[NEW]] - new content marker (standalone)
-  const markerRegex = /\[\[(KEYWORD|ADJUSTED):\s*([^\]]*)\]\]|\[\[(NEW)\]\]/g;
+  // Pattern to match <<<GREEN>>>text<<</GREEN>>>
+  // Using [\s\S] instead of 's' flag for ES5 compatibility
+  const greenPattern = /<<<GREEN>>>([\s\S]*?)<<\/GREEN>>>/g;
 
   let lastIndex = 0;
   let match;
 
-  while ((match = markerRegex.exec(processedContent)) !== null) {
-    // Add text before the marker (not highlighted)
+  while ((match = greenPattern.exec(content)) !== null) {
+    // Add text BEFORE the marker (not highlighted)
     if (match.index > lastIndex) {
-      const beforeText = processedContent.substring(lastIndex, match.index);
+      const beforeText = content.substring(lastIndex, match.index);
       if (beforeText) {
         runs.push(new TextRun({
-          text: cleanMarkdownEscapes(beforeText),
+          text: beforeText,
           font: FONT,
           size: baseStyle.size || FONT_SIZES.BODY,
           bold: baseStyle.bold,
@@ -1390,46 +1515,28 @@ function parseKeywordMarkersToTextRuns(
       }
     }
 
-    const markerType = match[1] || match[3]; // KEYWORD, ADJUSTED, or NEW
-    const markerContent = match[2] || ''; // The text inside the marker
-
-    if (markerType === 'KEYWORD' && markerContent) {
-      // Highlighted keyword insertion
+    // Add the GREEN-marked text with highlighting
+    const greenText = match[1].trim();
+    if (greenText) {
       runs.push(new TextRun({
-        text: cleanMarkdownEscapes(markerContent.trim()),
+        text: greenText,
         font: FONT,
         size: baseStyle.size || FONT_SIZES.BODY,
         bold: baseStyle.bold,
         color: baseStyle.color,
         shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
       }));
-    } else if (markerType === 'ADJUSTED' && markerContent) {
-      // For adjusted text, show the new version highlighted
-      // Format is "old → new", we want just the "new" part
-      const parts = markerContent.split('→').map(s => s.trim());
-      const newText = parts.length > 1 ? parts[1] : markerContent;
-      runs.push(new TextRun({
-        text: cleanMarkdownEscapes(newText),
-        font: FONT,
-        size: baseStyle.size || FONT_SIZES.BODY,
-        bold: baseStyle.bold,
-        color: baseStyle.color,
-        shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
-      }));
-    } else if (markerType === 'NEW') {
-      // NEW marker - just a standalone marker, skip it (the content after is what's new)
-      // Don't add anything - the [[NEW]] marker is informational
     }
 
     lastIndex = match.index + match[0].length;
   }
 
-  // Add any remaining text after the last marker
-  if (lastIndex < processedContent.length) {
-    const afterText = processedContent.substring(lastIndex);
+  // Add remaining text after last marker
+  if (lastIndex < content.length) {
+    const afterText = content.substring(lastIndex);
     if (afterText) {
       runs.push(new TextRun({
-        text: cleanMarkdownEscapes(afterText),
+        text: afterText,
         font: FONT,
         size: baseStyle.size || FONT_SIZES.BODY,
         bold: baseStyle.bold,
@@ -1438,10 +1545,10 @@ function parseKeywordMarkersToTextRuns(
     }
   }
 
-  // If no markers found and no runs created, return the whole content as a single run
+  // If no markers found, return whole content as single run
   if (runs.length === 0) {
     runs.push(new TextRun({
-      text: cleanMarkdownEscapes(processedContent),
+      text: content,
       font: FONT,
       size: baseStyle.size || FONT_SIZES.BODY,
       bold: baseStyle.bold,
@@ -1453,16 +1560,36 @@ function parseKeywordMarkersToTextRuns(
 }
 
 /**
+ * LEGACY: Clean and prepare content for document generation.
+ * This is kept for backwards compatibility - just delegates to masterContentCleaner
+ */
+function cleanAndPrepareContent(rawContent: string): string {
+  return masterContentCleaner(rawContent);
+}
+
+/**
+ * LEGACY: Parse [[KEYWORD:]] markers - now just delegates to parseGreenMarkersToTextRuns
+ * Since content is cleaned at entry point, markers are already converted to <<<GREEN>>>
+ */
+function parseKeywordMarkersToTextRuns(
+  content: string,
+  baseStyle: { bold?: boolean; size?: number; color?: string } = {}
+): TextRun[] {
+  // Content has been cleaned by masterContentCleaner - use GREEN marker parser
+  return parseGreenMarkersToTextRuns(content, baseStyle);
+}
+
+/**
  * Create TextRun array with inline highlighting for marked segments
- * Uses the new inline marker parsing for proper [[KEYWORD:]] handling
+ * NOW uses <<<GREEN>>>...<<</GREEN>>> markers from masterContentCleaner
  */
 function createTextRunsWithHighlighting(
   text: string,
   highlightSegments: string[],
   baseStyle: { bold?: boolean; size?: number; color?: string } = {}
 ): TextRun[] {
-  // Use the new inline marker parser which handles [[KEYWORD:]], [[ADJUSTED:]], [[NEW]] properly
-  return parseKeywordMarkersToTextRuns(text, baseStyle);
+  // Use the NEW GREEN marker parser - content has already been cleaned by masterContentCleaner
+  return parseGreenMarkersToTextRuns(text, baseStyle);
 }
 
 function generateFAQParagraphs(faqs: FAQ[], highlightAsNew: boolean = false): Paragraph[] {
