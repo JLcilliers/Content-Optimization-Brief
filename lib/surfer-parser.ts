@@ -268,6 +268,209 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
     debugInfo.pageContent = pageDebugInfo;
     console.log('[Surfer Parser] Page debug - Table rows:', pageDebugInfo.hasTr, 'Term elements:', pageDebugInfo.hasTermClass);
 
+    // ============================================
+    // DETAILED DEBUGGING: Understand HTML Structure
+    // ============================================
+    console.log('[Surfer Parser] Starting detailed extraction debug...');
+
+    const debugData = await page.evaluate(() => {
+      const debug: {
+        ariaRows: Array<{
+          index: number;
+          cellCount: number;
+          rowHTML: string;
+          rowClasses: string;
+          rowRole: string | null;
+          cells: Array<{
+            index: number;
+            text: string;
+            html: string;
+            classes: string;
+            childTags: string;
+          }>;
+        }>;
+        ariaRowCount: number;
+        tableRows: Array<{
+          index: number;
+          cellCount: number;
+          cells: Array<{
+            index: number;
+            text: string;
+          }>;
+        }>;
+        tableRowCount: number;
+        allRoles: string[];
+        termClassElements: Array<{
+          tag: string;
+          classes: string;
+          text: string;
+          html: string;
+        }>;
+        termElementCount: number;
+        sectionCount: number;
+        termsSectionFound: boolean;
+        termsSectionHTML: string;
+        termsSectionRows: number;
+        termsSectionRowSamples: Array<{
+          html: string;
+          text: string;
+        }>;
+        flexContainerCount: number;
+        termPatternMatches: string[];
+        visibleTextSample: string;
+      } = {
+        ariaRows: [],
+        ariaRowCount: 0,
+        tableRows: [],
+        tableRowCount: 0,
+        allRoles: [],
+        termClassElements: [],
+        termElementCount: 0,
+        sectionCount: 0,
+        termsSectionFound: false,
+        termsSectionHTML: '',
+        termsSectionRows: 0,
+        termsSectionRowSamples: [],
+        flexContainerCount: 0,
+        termPatternMatches: [],
+        visibleTextSample: ''
+      };
+
+      // 1. Log all ARIA rows and their structure
+      const ariaRows = document.querySelectorAll('[role="row"]');
+      debug.ariaRowCount = ariaRows.length;
+
+      // Sample first 5 rows' HTML structure
+      ariaRows.forEach((row, index) => {
+        if (index < 5) {
+          const cells = row.querySelectorAll('[role="cell"], [role="gridcell"]');
+          const rowData = {
+            index,
+            cellCount: cells.length,
+            rowHTML: row.outerHTML.substring(0, 500),
+            rowClasses: (row as HTMLElement).className,
+            rowRole: row.getAttribute('role'),
+            cells: Array.from(cells).slice(0, 4).map((cell, ci) => ({
+              index: ci,
+              text: (cell.textContent || '').trim().substring(0, 100),
+              html: cell.outerHTML.substring(0, 300),
+              classes: (cell as HTMLElement).className,
+              childTags: Array.from(cell.children).map(c => c.tagName).join(', ')
+            }))
+          };
+          debug.ariaRows.push(rowData);
+        }
+      });
+
+      // 2. Log traditional table rows
+      const tableRows = document.querySelectorAll('tr');
+      debug.tableRowCount = tableRows.length;
+
+      tableRows.forEach((row, index) => {
+        if (index < 3) {
+          const cells = row.querySelectorAll('td, th');
+          debug.tableRows.push({
+            index,
+            cellCount: cells.length,
+            cells: Array.from(cells).slice(0, 4).map((cell, ci) => ({
+              index: ci,
+              text: (cell.textContent || '').trim().substring(0, 100)
+            }))
+          });
+        }
+      });
+
+      // 3. Find all unique role attributes on the page
+      const allElements = document.querySelectorAll('*');
+      const roles = new Set<string>();
+      allElements.forEach(el => {
+        const role = el.getAttribute('role');
+        if (role) roles.add(role);
+      });
+      debug.allRoles = Array.from(roles);
+
+      // 4. Find elements with "term" in class name
+      const termElements = document.querySelectorAll('[class*="term" i], [class*="Term"]');
+      debug.termElementCount = termElements.length;
+
+      termElements.forEach((el, index) => {
+        if (index < 5) {
+          debug.termClassElements.push({
+            tag: el.tagName,
+            classes: (el as HTMLElement).className,
+            text: (el.textContent || '').trim().substring(0, 100),
+            html: el.outerHTML.substring(0, 300)
+          });
+        }
+      });
+
+      // 5. Find the "Terms to Use" section specifically
+      const sections = document.querySelectorAll('section, [class*="section" i]');
+      debug.sectionCount = sections.length;
+
+      sections.forEach((section) => {
+        const text = section.textContent || '';
+        if (text.includes('Terms') || text.includes('Important')) {
+          debug.termsSectionFound = true;
+          debug.termsSectionHTML = section.outerHTML.substring(0, 1000);
+
+          // Find all child elements with data
+          const innerRows = section.querySelectorAll('[role="row"], tr, [class*="row" i]');
+          debug.termsSectionRows = innerRows.length;
+
+          if (innerRows.length > 0 && innerRows.length < 10) {
+            debug.termsSectionRowSamples = Array.from(innerRows).slice(0, 3).map(r => ({
+              html: r.outerHTML.substring(0, 500),
+              text: (r.textContent || '').trim().substring(0, 200)
+            }));
+          }
+        }
+      });
+
+      // 6. Look for data in different structures
+      // Maybe it's using divs with flex/grid layout
+      const flexContainers = document.querySelectorAll('[class*="grid" i], [class*="list" i], [class*="table" i]');
+      debug.flexContainerCount = flexContainers.length;
+
+      // 7. Search for any element containing typical term patterns
+      // Like "keyword 2/5" or numbers that look like counts
+      const bodyText = document.body.innerText;
+      const termPatternMatches = bodyText.match(/\b[a-z]{3,20}\s+\d+\s*[\/\-]\s*\d+/gi);
+      debug.termPatternMatches = termPatternMatches?.slice(0, 10) || [];
+
+      // 8. Get a sample of visible text that might contain terms
+      const visibleText = bodyText.substring(0, 2000);
+      debug.visibleTextSample = visibleText;
+
+      return debug;
+    });
+
+    // Log the debug data in chunks to avoid truncation
+    console.log('[Surfer Parser] Debug - ARIA row count:', debugData.ariaRowCount);
+    console.log('[Surfer Parser] Debug - Table row count:', debugData.tableRowCount);
+    console.log('[Surfer Parser] Debug - Term element count:', debugData.termElementCount);
+    console.log('[Surfer Parser] Debug - All roles on page:', JSON.stringify(debugData.allRoles));
+    console.log('[Surfer Parser] Debug - Flex container count:', debugData.flexContainerCount);
+    console.log('[Surfer Parser] Debug - Terms section found:', debugData.termsSectionFound);
+
+    if (debugData.ariaRows.length > 0) {
+      console.log('[Surfer Parser] Debug - First ARIA row:', JSON.stringify(debugData.ariaRows[0], null, 2));
+      if (debugData.ariaRows.length > 1) {
+        console.log('[Surfer Parser] Debug - Second ARIA row:', JSON.stringify(debugData.ariaRows[1], null, 2));
+      }
+    }
+
+    if (debugData.termClassElements.length > 0) {
+      console.log('[Surfer Parser] Debug - Term class elements:', JSON.stringify(debugData.termClassElements.slice(0, 3), null, 2));
+    }
+
+    console.log('[Surfer Parser] Debug - Term pattern matches:', JSON.stringify(debugData.termPatternMatches));
+    console.log('[Surfer Parser] Debug - Visible text sample (first 500 chars):', debugData.visibleTextSample.substring(0, 500));
+
+    // ============================================
+    // END DETAILED DEBUGGING
+    // ============================================
+
     console.log('[Surfer Parser] Extracting data with multiple strategies...');
 
     // Extract all data from the page using multiple strategies
