@@ -1149,13 +1149,27 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
 
   // CRITICAL: Split structured markers onto their own lines if AI didn't add newlines
   // This handles cases where AI outputs: "[H1] Title [PARA] Content [H2] Heading"
+  // or "H1 Title PARA Content H2 Heading" (without brackets)
   // and converts it to separate lines
   processedContent = processedContent
+    // With brackets
     .replace(/\s*\[H1\]/g, '\n[H1]')
     .replace(/\s*\[H2\]/g, '\n[H2]')
     .replace(/\s*\[H3\]/g, '\n[H3]')
     .replace(/\s*\[PARA\]/g, '\n[PARA]')
     .replace(/\s*\[BULLET\]/g, '\n[BULLET]')
+    // Without brackets - handle "H1 text" format (word boundary to avoid matching "H1" in middle of text)
+    .replace(/^H1\s+/gm, '\n[H1] ')
+    .replace(/^H2\s+/gm, '\n[H2] ')
+    .replace(/^H3\s+/gm, '\n[H3] ')
+    .replace(/^PARA\s+/gm, '\n[PARA] ')
+    .replace(/^BULLET\s+/gm, '\n[BULLET] ')
+    // Also handle inline without brackets (e.g., "... text H1 heading ...")
+    .replace(/\s+H1\s+/g, '\n[H1] ')
+    .replace(/\s+H2\s+/g, '\n[H2] ')
+    .replace(/\s+H3\s+/g, '\n[H3] ')
+    .replace(/\s+PARA\s+/g, '\n[PARA] ')
+    .replace(/\s+BULLET\s+/g, '\n[BULLET] ')
     .trim();
 
   console.log('[doc-generator] Processing content with inline marker parsing');
