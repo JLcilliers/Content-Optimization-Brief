@@ -1180,9 +1180,9 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
   for (const line of lines) {
     const trimmedLine = line.trim();
 
+    // CRITICAL: Skip empty lines entirely - DO NOT create empty paragraphs
+    // Empty paragraphs were causing large gaps in the document
     if (!trimmedLine) {
-      // Add spacing paragraph for empty lines
-      paragraphs.push(new Paragraph({ spacing: { after: 100 } }));
       continue;
     }
 
@@ -1192,15 +1192,24 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       /^BULLET$/i,                  // Stray "BULLET" text
       /^H[123]$/i,                  // Stray "H1", "H2", "H3" text
       /^Get a Quote$/i,             // Button text
+      /^Get a quote$/i,             // Button text (lowercase)
       /^Learn More$/i,              // Button text
       /^Read More$/i,               // Button text
       /^Contact Us$/i,              // Button text
       /^Submit$/i,                  // Button text
       /^Sign Up$/i,                 // Button text
+      /^Apply Now$/i,               // Button text
+      /^Request a Quote$/i,         // Button text
+      /^Privacy Policy$/i,          // Footer text
+      /^Terms of Service$/i,        // Footer text
+      /^©/,                         // Copyright text
       /^\[PARA\]$/i,                // Empty PARA marker
       /^\[BULLET\]$/i,              // Empty BULLET marker
       /^\[H[123]\]$/i,              // Empty heading marker
       /^\[\[NEW\]\]$/i,             // Standalone [[NEW]] marker
+      /^\[PARA\s*\(/i,              // [PARA (http... junk
+      /^\(https?:\/\//i,            // Bare URLs starting with (http
+      /^https?:\/\/[^\s]+$/i,       // Standalone URLs
     ];
 
     if (junkPatterns.some(pattern => pattern.test(trimmedLine))) {
@@ -1234,7 +1243,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.PRIMARY,
           }),
           heading: HeadingLevel.HEADING_1,
-          spacing: { before: 240, after: 120 },
+          spacing: { before: 200, after: 100 },
         })
       );
       continue;
@@ -1251,7 +1260,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.SECONDARY,
           }),
           heading: HeadingLevel.HEADING_2,
-          spacing: { before: 240, after: 120 },
+          spacing: { before: 160, after: 80 },
         })
       );
       continue;
@@ -1268,7 +1277,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.TERTIARY,
           }),
           heading: HeadingLevel.HEADING_3,
-          spacing: { before: 200, after: 80 },
+          spacing: { before: 120, after: 60 },
         })
       );
       continue;
@@ -1280,7 +1289,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       paragraphs.push(
         new Paragraph({
           children: createTextRunsWithHighlighting(paraText, []),
-          spacing: { before: 0, after: 200 },
+          spacing: { before: 0, after: 120 },
         })
       );
       continue;
@@ -1315,7 +1324,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.PRIMARY,
           }),
           heading: HeadingLevel.HEADING_1,
-          spacing: { before: 240, after: 120 },
+          spacing: { before: 200, after: 100 },
         })
       );
       continue;
@@ -1332,7 +1341,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.SECONDARY,
           }),
           heading: HeadingLevel.HEADING_2,
-          spacing: { before: 240, after: 120 },
+          spacing: { before: 160, after: 80 },
         })
       );
       continue;
@@ -1349,7 +1358,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.TERTIARY,
           }),
           heading: HeadingLevel.HEADING_3,
-          spacing: { before: 200, after: 80 },
+          spacing: { before: 120, after: 60 },
         })
       );
       continue;
@@ -1386,7 +1395,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
     paragraphs.push(
       new Paragraph({
         children: createTextRunsWithHighlighting(cleanedLine, []),
-        spacing: { before: 0, after: 200 },
+        spacing: { before: 0, after: 120 },
       })
     );
   }
