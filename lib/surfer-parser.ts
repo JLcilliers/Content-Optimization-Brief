@@ -645,45 +645,93 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
 
       // Find the "Terms to Use" or "Important terms" section
       const findTermsSection = (): Element | null => {
-        // Look for section headers containing "Terms" or "Important"
+        // Strategy A: Look for ANY element containing "Terms to Use" or similar text
+        // and walk up to find the container with data rows
+        const allElements = document.querySelectorAll('*');
+        for (const el of allElements) {
+          // Check direct text content (not children)
+          const directText = Array.from(el.childNodes)
+            .filter(node => node.nodeType === Node.TEXT_NODE)
+            .map(node => node.textContent || '')
+            .join('')
+            .trim()
+            .toLowerCase();
+
+          const fullText = (el.textContent || '').toLowerCase();
+
+          // Check if this element or its direct text mentions terms
+          if (directText.includes('terms to use') || directText.includes('important terms') ||
+              (fullText.includes('terms to use') && fullText.length < 50)) {
+            // Found a Terms label - walk up to find the data container
+            let parent = el.parentElement;
+            for (let i = 0; i < 15 && parent; i++) {
+              // Check if this parent contains rows with "Add X" patterns
+              const rows = parent.querySelectorAll('[role="row"], tr, [class*="row"]');
+              let termRowCount = 0;
+              rows.forEach(row => {
+                const rowText = row.textContent || '';
+                if (rowText.includes('Add ') && !rowText.includes('http')) {
+                  termRowCount++;
+                }
+              });
+
+              // If we find a container with 3+ term rows, this is likely it
+              if (termRowCount >= 3) {
+                console.log('findTermsSection: Found container with', termRowCount, 'term rows');
+                return parent;
+              }
+              parent = parent.parentElement;
+            }
+          }
+        }
+
+        // Strategy B: Look for heading elements
         const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6, [class*="heading"], [class*="title"], button');
         for (const heading of headings) {
           const text = (heading.textContent || '').toLowerCase();
           if (text.includes('terms to use') || text.includes('important terms') ||
-              (text.includes('terms') && !text.includes('competitor'))) {
+              (text.includes('terms') && !text.includes('competitor') && text.length < 30)) {
             // Found the Terms section header - look for the containing section
-            // Walk up to find a container that has the table/data
             let parent = heading.parentElement;
-            for (let i = 0; i < 10 && parent; i++) {
-              // Check if this parent contains ARIA table rows or regular table rows
+            for (let i = 0; i < 15 && parent; i++) {
               const hasDataRows = parent.querySelectorAll('[role="row"], tr').length > 0;
               if (hasDataRows) {
                 return parent;
               }
               parent = parent.parentElement;
             }
-            // If no table found in parent, return the heading's closest section
             return heading.closest('section, [class*="section"], [class*="card"], article, div[class*="container"]');
           }
         }
 
-        // Fallback: Look for elements that contain term-like text patterns
-        // (terms with "Add X" action text nearby)
-        const allSections = document.querySelectorAll('section, [class*="section"], [class*="panel"], [class*="card"]');
-        for (const section of allSections) {
-          const text = section.textContent || '';
-          // Check if section has term-like content (action suggestions)
-          if (text.includes('Add 1') || text.includes('Add 2') ||
-              (text.match(/\bAdd\s+\d+/g)?.length || 0) > 3) {
-            // Found a section with many "Add X" patterns - likely the terms section
-            return section;
+        // Strategy C: Find container with the most "Add X" patterns (terms)
+        // Exclude containers that have competitor URLs
+        const containers = document.querySelectorAll('section, [class*="section"], [class*="panel"], [class*="card"], [class*="table"], [role="table"]');
+        let bestContainer: Element | null = null;
+        let bestAddCount = 0;
+
+        for (const container of containers) {
+          const text = container.textContent || '';
+          const addPatterns = text.match(/\bAdd\s+\d+(-\d+)?\b/gi) || [];
+          const hasUrls = text.includes('http://') || text.includes('https://');
+
+          // Prefer containers with many Add patterns and few/no URLs
+          if (addPatterns.length > bestAddCount && (!hasUrls || addPatterns.length > 10)) {
+            bestAddCount = addPatterns.length;
+            bestContainer = container;
           }
+        }
+
+        if (bestAddCount >= 3) {
+          console.log('findTermsSection: Found container with', bestAddCount, 'Add patterns');
+          return bestContainer;
         }
 
         return null;
       };
 
       const termsSection = findTermsSection();
+      console.log('termsSection found:', !!termsSection, 'tag:', termsSection?.tagName, 'class:', (termsSection as HTMLElement)?.className?.substring(0, 100));
 
       // If we found a terms section, extract ONLY from there
       // Otherwise, fall back to page-wide search (but with better filtering)
@@ -1035,7 +1083,103 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
         });
       }
 
-      // STRATEGY 5: Regex search in page text for "word X/Y" patterns
+      // STRATEGY 5: Extract rows that contain "Add X" action patterns
+      // This is more reliable because we know these patterns exist on the page
+      if (data.terms.length < 10) {
+        console.log('Strategy 5: Looking for rows with Add X patterns');
+        const allRows = document.querySelectorAll('[role="row"], tr, [class*="row"]');
+        let foundInStrategy5 = 0;
+
+        allRows.forEach((row) => {
+          const rowText = row.textContent || '';
+
+          // Skip if this row has competitor URL patterns
+          if (rowText.includes('http://') || rowText.includes('https://') ||
+              rowText.includes('.com/') || rowText.includes('.org/') ||
+              rowText.includes('.net/')) {
+            return;
+          }
+
+          // Look for "Add X" or "Add X-Y" pattern
+          const actionMatch = rowText.match(/\b(Add|Remove|Reduce)\s+(\d+)(?:-(\d+))?\b/i);
+          if (!actionMatch) return;
+
+          const action = actionMatch[0];
+          const suggestedMin = parseInt(actionMatch[2]);
+          const suggestedMax = actionMatch[3] ? parseInt(actionMatch[3]) : suggestedMin;
+
+          // Get all text parts from the row
+          const cells = row.querySelectorAll('[role="cell"], [role="gridcell"], td, span, div');
+          let term = '';
+          let isNLP = false;
+          let currentCount = 0;
+          let relevance: number | null = null;
+
+          // First cell is usually the term
+          if (cells.length > 0) {
+            const firstCellText = (cells[0]?.textContent || '').trim();
+            // Remove NLP badge if present
+            isNLP = firstCellText.toLowerCase().includes('nlp');
+            term = firstCellText.replace(/\s*NLP\s*/gi, '').trim();
+
+            // Skip if term looks like a header or is too short/long
+            if (term.length < 2 || term.length > 80 || term.toLowerCase().includes('term')) {
+              return;
+            }
+          }
+
+          // Look for count patterns like "0" in a cell (your current usage)
+          for (let i = 1; i < Math.min(cells.length, 5); i++) {
+            const cellText = (cells[i]?.textContent || '').trim();
+            // Current count - usually a single number
+            if (/^\d+$/.test(cellText)) {
+              currentCount = parseInt(cellText);
+              break;
+            }
+          }
+
+          // Look for relevance percentage
+          for (let i = 1; i < cells.length; i++) {
+            const cellText = (cells[i]?.textContent || '').trim();
+            if (cellText.includes('%')) {
+              const relMatch = cellText.match(/([\d.]+)\s*%/);
+              if (relMatch) {
+                const relValue = parseFloat(relMatch[1]);
+                relevance = relValue > 1 ? relValue / 100 : relValue;
+                break;
+              }
+            }
+          }
+
+          if (term && term.length > 1) {
+            // Check if we already have this term
+            const termLower = term.toLowerCase();
+            const exists = data.terms.some(t => t.term.toLowerCase() === termLower);
+            if (!exists) {
+              foundInStrategy5++;
+              data.terms.push({
+                term,
+                isNLP,
+                currentCount,
+                recommendedMin: suggestedMin,
+                recommendedMax: suggestedMax,
+                competitorMin: null,
+                competitorMax: null,
+                relevance,
+                action,
+                status: currentCount === 0 ? 'missing' : (currentCount < suggestedMin ? 'low' : 'good')
+              });
+            }
+          }
+        });
+
+        if (foundInStrategy5 > 0) {
+          data.extractionMethod = data.extractionMethod + '+action-rows';
+          console.log('Strategy 5 found', foundInStrategy5, 'additional terms');
+        }
+      }
+
+      // STRATEGY 6: Regex search in page text for "word X/Y" patterns
       if (data.terms.length === 0) {
         data.extractionMethod = 'regex';
         const pageText = document.body.innerText;
