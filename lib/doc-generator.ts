@@ -249,7 +249,7 @@ function createHighlightedTextRun(
     italics: options.italics,
     color: options.color,
     // Use shading for green highlight (more subtle than highlight property)
-    shading: options.isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+    highlight: options.isNew ? "green" : undefined,
   });
 }
 
@@ -289,7 +289,7 @@ function createHighlightedHeading(
         size: sizes[level],
         bold: true,
         color: colors[level],
-        shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+        highlight: isNew ? "green" : undefined,
       })
     ],
     spacing: { before: level === 1 ? 360 : level === 2 ? 280 : 240, after: level === 1 ? 200 : level === 2 ? 160 : 120 },
@@ -386,7 +386,7 @@ function createComparisonTable(
             text,
             size: FONT_SIZES.CODE,
             font: FONT,
-            shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
+            highlight: "green",
           })],
         }),
       ],
@@ -660,7 +660,7 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
                 font: FONT,
                 size: 22,
                 bold: true,
-                shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
+                highlight: "green",
               }),
               new TextRun({
                 text: ' are keyword insertions or small adjustments. The rest of the content remains unchanged from the original page.',
@@ -733,7 +733,7 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
                       size: FONT_SIZES.HEADING2,
                       font: FONT,
                       color: COLORS.SECONDARY,
-                      shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
+                      highlight: "green",
                     }),
                   ],
                   heading: HeadingLevel.HEADING_2,
@@ -754,7 +754,7 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
                       size: FONT_SIZES.HEADING2,
                       font: FONT,
                       color: COLORS.SECONDARY,
-                      shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
+                      highlight: "green",
                     }),
                   ],
                   heading: HeadingLevel.HEADING_2,
@@ -1003,7 +1003,7 @@ function parseInlineFormattingWithHighlight(text: string, isNew: boolean = false
             text: plainText,
             size: FONT_SIZES.BODY,
             font: FONT,
-            shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+            highlight: isNew ? "green" : undefined,
           })
         );
       }
@@ -1026,7 +1026,7 @@ function parseInlineFormattingWithHighlight(text: string, isNew: boolean = false
                 font: FONT,
                 color: COLORS.LINK,
                 underline: { type: 'single' },
-                shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+                highlight: isNew ? "green" : undefined,
               }),
             ],
             link: linkInBold[2],
@@ -1039,7 +1039,7 @@ function parseInlineFormattingWithHighlight(text: string, isNew: boolean = false
             bold: true,
             size: FONT_SIZES.BODY,
             font: FONT,
-            shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+            highlight: isNew ? "green" : undefined,
           })
         );
       }
@@ -1052,7 +1052,7 @@ function parseInlineFormattingWithHighlight(text: string, isNew: boolean = false
           italics: true,
           size: FONT_SIZES.BODY,
           font: FONT,
-          shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+          highlight: isNew ? "green" : undefined,
         })
       );
     }
@@ -1069,7 +1069,7 @@ function parseInlineFormattingWithHighlight(text: string, isNew: boolean = false
               font: FONT,
               color: COLORS.LINK,
               underline: { type: 'single' },
-              shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+              highlight: isNew ? "green" : undefined,
             }),
           ],
           link: linkUrl,
@@ -1089,7 +1089,7 @@ function parseInlineFormattingWithHighlight(text: string, isNew: boolean = false
           text: remainingText,
           size: FONT_SIZES.BODY,
           font: FONT,
-          shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+          highlight: isNew ? "green" : undefined,
         })
       );
     }
@@ -1102,7 +1102,7 @@ function parseInlineFormattingWithHighlight(text: string, isNew: boolean = false
         text: cleanedText,
         size: FONT_SIZES.BODY,
         font: FONT,
-        shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+        highlight: isNew ? "green" : undefined,
       })
     );
   }
@@ -1186,6 +1186,27 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       continue;
     }
 
+    // JUNK LINE FILTERS - Skip lines that are stray markers or button text
+    const junkPatterns = [
+      /^PARA$/i,                    // Stray "PARA" text
+      /^BULLET$/i,                  // Stray "BULLET" text
+      /^H[123]$/i,                  // Stray "H1", "H2", "H3" text
+      /^Get a Quote$/i,             // Button text
+      /^Learn More$/i,              // Button text
+      /^Read More$/i,               // Button text
+      /^Contact Us$/i,              // Button text
+      /^Submit$/i,                  // Button text
+      /^Sign Up$/i,                 // Button text
+      /^\[PARA\]$/i,                // Empty PARA marker
+      /^\[BULLET\]$/i,              // Empty BULLET marker
+      /^\[H[123]\]$/i,              // Empty heading marker
+    ];
+
+    if (junkPatterns.some(pattern => pattern.test(trimmedLine))) {
+      console.log('[doc-generator] Filtering junk line:', trimmedLine);
+      continue;
+    }
+
     // NEW STRUCTURED FORMAT: [H1] Heading
     if (trimmedLine.startsWith('[H1]')) {
       const headingText = trimmedLine.replace('[H1]', '').trim();
@@ -1202,7 +1223,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.PRIMARY,
           }),
           heading: HeadingLevel.HEADING_1,
-          spacing: { before: 400, after: 200 },
+          spacing: { before: 200, after: 100 },
         })
       );
       continue;
@@ -1219,7 +1240,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.SECONDARY,
           }),
           heading: HeadingLevel.HEADING_2,
-          spacing: { before: 300, after: 150 },
+          spacing: { before: 150, after: 60 },
         })
       );
       continue;
@@ -1236,7 +1257,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.TERTIARY,
           }),
           heading: HeadingLevel.HEADING_3,
-          spacing: { before: 200, after: 100 },
+          spacing: { before: 120, after: 40 },
         })
       );
       continue;
@@ -1248,7 +1269,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       paragraphs.push(
         new Paragraph({
           children: createTextRunsWithHighlighting(paraText, []),
-          spacing: { after: 200 },
+          spacing: { after: 80 },
         })
       );
       continue;
@@ -1283,7 +1304,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.PRIMARY,
           }),
           heading: HeadingLevel.HEADING_1,
-          spacing: { before: 400, after: 200 },
+          spacing: { before: 200, after: 100 },
         })
       );
       continue;
@@ -1300,7 +1321,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.SECONDARY,
           }),
           heading: HeadingLevel.HEADING_2,
-          spacing: { before: 300, after: 150 },
+          spacing: { before: 150, after: 60 },
         })
       );
       continue;
@@ -1317,7 +1338,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.TERTIARY,
           }),
           heading: HeadingLevel.HEADING_3,
-          spacing: { before: 200, after: 100 },
+          spacing: { before: 120, after: 40 },
         })
       );
       continue;
@@ -1422,6 +1443,11 @@ function convertLineToTextRuns(
     return runs;
   }
 
+  // DEBUG: Log if line contains keyword markers
+  if (line.includes('[[KEYWORD:') || line.includes('[[ADJUSTED:')) {
+    console.log('[doc-generator] Found markers in line:', line.substring(0, 100) + (line.length > 100 ? '...' : ''));
+  }
+
   let processedLine = line;
 
   // Step 1: Fix spacing around [[KEYWORD:]] and [[ADJUSTED:]] markers
@@ -1469,13 +1495,14 @@ function convertLineToTextRuns(
 
     // The keyword/adjusted text - GREEN HIGHLIGHTED
     if (highlightText) {
+      console.log(`[doc-generator] Creating GREEN highlight for: "${highlightText}"`);
       runs.push(new TextRun({
         text: highlightText,
         font: FONT,
         size: baseStyle.size || FONT_SIZES.BODY,
         bold: baseStyle.bold,
         color: baseStyle.color,
-        shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
+        highlight: "green",
       }));
     }
 
@@ -1545,7 +1572,7 @@ function generateFAQParagraphs(faqs: FAQ[], highlightAsNew: boolean = false): Pa
             bold: true,
             size: FONT_SIZES.BODY,
             font: FONT,
-            shading: highlightAsNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+            highlight: highlightAsNew ? "green" : undefined,
           }),
         ],
         spacing: { before: 200, after: 100 },
@@ -1560,7 +1587,7 @@ function generateFAQParagraphs(faqs: FAQ[], highlightAsNew: boolean = false): Pa
             text: `A: ${faq.answer}`,
             size: FONT_SIZES.BODY,
             font: FONT,
-            shading: highlightAsNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+            highlight: highlightAsNew ? "green" : undefined,
           }),
         ],
         spacing: { after: 150 },
@@ -1585,7 +1612,7 @@ function generateSchemaParagraphs(recommendations: SchemaRecommendation[]): Para
             bold: true,
             size: FONT_SIZES.BODY,
             font: FONT,
-            shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
+            highlight: "green",
           }),
         ],
         spacing: { before: 200, after: 50 },
@@ -1764,7 +1791,7 @@ function createMetadataTable(
                   text: `${cleanMarkersForDisplay(optimizedContent.metaTitle)} (${cleanMarkersForDisplay(optimizedContent.metaTitle).length} chars)`,
                   size: 22,
                   font: FONT,
-                  shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
+                  highlight: "green",
                 }),
               ],
             }),
@@ -1798,7 +1825,7 @@ function createMetadataTable(
                   text: `${cleanMarkersForDisplay(optimizedContent.metaDescription)} (${cleanMarkersForDisplay(optimizedContent.metaDescription).length} chars)`,
                   size: 22,
                   font: FONT,
-                  shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
+                  highlight: "green",
                 }),
               ],
             }),
@@ -1866,7 +1893,7 @@ function createMetadataTable(
                   text: cleanMarkersForDisplay(optimizedContent.h1),
                   size: 22,
                   font: FONT,
-                  shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
+                  highlight: "green",
                 }),
               ],
             }),
