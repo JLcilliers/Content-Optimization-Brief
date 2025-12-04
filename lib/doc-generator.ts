@@ -53,6 +53,100 @@ interface DocGeneratorOptions {
   pageName: string;
 }
 
+// Module-level H1 tracking to prevent duplicates
+let processedH1s: Set<string> = new Set();
+
+/**
+ * Clean markers from text for display (removes [[KEYWORD:]], [[ADJUSTED:]], [[NEW]])
+ * Used for metadata fields where we want clean text without markers
+ */
+function cleanMarkersForDisplay(text: string): string {
+  return text
+    .replace(/\[\[KEYWORD:\s*([^\]]*)\]\]/g, '$1')
+    .replace(/\[\[ADJUSTED:\s*[^→]*→\s*([^\]]*)\]\]/g, '$1')
+    .replace(/\[\[NEW\]\]/g, '')
+    .trim();
+}
+
+/**
+ * Reset H1 tracking - call at start of each document generation
+ */
+function resetH1Tracking(): void {
+  processedH1s = new Set();
+}
+
+/**
+ * Check if an H1 is a duplicate (case-insensitive, normalized)
+ */
+function isDuplicateH1(content: string): boolean {
+  const normalized = cleanMarkersForDisplay(content)
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (processedH1s.has(normalized)) {
+    console.log('[doc-generator] Skipping duplicate H1:', normalized);
+    return true;
+  }
+
+  processedH1s.add(normalized);
+  return false;
+}
+
+/**
+ * Filter out footer content that shouldn't appear in the document
+ */
+function filterFooterContent(content: string): string {
+  // Patterns that indicate footer/non-content areas
+  const footerPatterns = [
+    /©.*All Rights Reserved.*/gi,
+    /©\s*\d{4}.*/gi,
+    /Privacy Policy.*/gi,
+    /Terms of Service.*/gi,
+    /Cookie Policy.*/gi,
+    /\| All Rights Reserved \|/gi,
+    /Follow us on.*/gi,
+    /Connect with us.*/gi,
+    /^\s*©.*/gm,
+  ];
+
+  let filtered = content;
+  for (const pattern of footerPatterns) {
+    filtered = filtered.replace(pattern, '');
+  }
+
+  // Split into lines and filter aggressively in the last portion
+  const lines = filtered.split('\n');
+  const cutoffIndex = Math.floor(lines.length * 0.85);
+
+  const cleanedLines = lines.filter((line, index) => {
+    const trimmedLine = line.trim();
+
+    // Always filter these patterns regardless of position
+    if (trimmedLine.includes('©') ||
+        trimmedLine.includes('All Rights Reserved') ||
+        /Privacy Policy/i.test(trimmedLine) ||
+        /Terms of (Service|Use)/i.test(trimmedLine)) {
+      return false;
+    }
+
+    // More aggressive filtering for bottom 15% of content
+    if (index > cutoffIndex) {
+      // Skip very short lines at the end (likely footer links)
+      if (trimmedLine.length < 20 && trimmedLine.length > 0) {
+        // Check if it looks like a footer link
+        if (/^[A-Z][a-z]+(\s[A-Z][a-z]+)*$/.test(trimmedLine)) {
+          return false;
+        }
+      }
+    }
+
+    return true;
+  });
+
+  return cleanedLines.join('\n').trim();
+}
+
 // Numbering configuration for bullet lists
 const numberingConfig: INumberingOptions = {
   config: [
@@ -328,6 +422,10 @@ function createComparisonTable(
 
 export async function generateDocument(options: DocGeneratorOptions): Promise<Buffer> {
   console.log('[doc-generator] Starting document generation...');
+
+  // Reset H1 tracking for each new document
+  resetH1Tracking();
+
   const { analysisResult, settings, clientName, pageName } = options;
   const { crawledData, optimizedContent, keywords } = analysisResult;
   console.log('[doc-generator] Content length:', optimizedContent?.fullContent?.length || 0);
@@ -972,18 +1070,6 @@ function parseInlineFormattingWithHighlight(text: string, isNew: boolean = false
 }
 
 /**
- * Clean markers from text for display (removes [[KEYWORD:]], [[ADJUSTED:]], [[NEW]])
- * Used for metadata fields where we want clean text without markers
- */
-function cleanMarkersForDisplay(text: string): string {
-  return text
-    .replace(/\[\[KEYWORD:\s*([^\]]*)\]\]/g, '$1')
-    .replace(/\[\[ADJUSTED:\s*[^→]*→\s*([^\]]*)\]\]/g, '$1')
-    .replace(/\[\[NEW\]\]/g, '')
-    .trim();
-}
-
-/**
  * Parse structured content with [H1], [H2], [H3], [PARA], [BULLET] markers
  * Also handles legacy markdown format for backwards compatibility
  * The AI marks changes with [[KEYWORD: term]], [[ADJUSTED: old → new]], [[NEW]]
@@ -994,12 +1080,12 @@ function cleanMarkersForDisplay(text: string): string {
 function parseContentToParagraphs(content: string, originalContent?: string): Paragraph[] {
   const paragraphs: Paragraph[] = [];
 
-  // Track seen H1s to prevent duplicates
-  const seenH1s = new Set<string>();
+  // First filter out footer content
+  let processedContent = filterFooterContent(content);
 
-  // First clean the content of any residual markdown/HTML but KEEP the [[KEYWORD:]] markers
+  // Clean residual markdown/HTML but KEEP the [[KEYWORD:]] markers
   // We only clean markdown/HTML, not our custom markers
-  let processedContent = content
+  processedContent = processedContent
     // Remove escaped markdown characters
     .replace(/\\\*/g, '*')
     .replace(/\\\[/g, '[')
@@ -1040,13 +1126,10 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
     // NEW STRUCTURED FORMAT: [H1] Heading
     if (trimmedLine.startsWith('[H1]')) {
       const headingText = trimmedLine.replace('[H1]', '').trim();
-      // Check for duplicate H1 (compare clean text without markers)
-      const cleanHeading = cleanMarkersForDisplay(headingText).toLowerCase();
-      if (seenH1s.has(cleanHeading)) {
-        console.log('[doc-generator] Skipping duplicate H1:', cleanHeading);
+      // Check for duplicate H1 using module-level tracking
+      if (isDuplicateH1(headingText)) {
         continue; // Skip duplicate H1
       }
-      seenH1s.add(cleanHeading);
 
       paragraphs.push(
         new Paragraph({
@@ -1124,13 +1207,10 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
     // LEGACY FORMAT: # H1 heading (markdown)
     if (trimmedLine.startsWith('# ') && !trimmedLine.startsWith('## ')) {
       const headingText = trimmedLine.replace('# ', '');
-      // Check for duplicate H1 (compare clean text without markers)
-      const cleanHeading = cleanMarkersForDisplay(headingText).toLowerCase();
-      if (seenH1s.has(cleanHeading)) {
-        console.log('[doc-generator] Skipping duplicate H1 (markdown):', cleanHeading);
+      // Check for duplicate H1 using module-level tracking
+      if (isDuplicateH1(headingText)) {
         continue; // Skip duplicate H1
       }
-      seenH1s.add(cleanHeading);
 
       paragraphs.push(
         new Paragraph({
@@ -1222,6 +1302,8 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
 /**
  * Parse [[KEYWORD: text]], [[ADJUSTED: old → new]], [[NEW]] markers inline
  * and convert them to TextRuns with green highlighting
+ *
+ * IMPORTANT: Handles spacing around keywords to prevent words running together
  */
 function parseKeywordMarkersToTextRuns(
   content: string,
@@ -1241,7 +1323,14 @@ function parseKeywordMarkersToTextRuns(
   while ((match = markerRegex.exec(content)) !== null) {
     // Add text before the marker (not highlighted)
     if (match.index > lastIndex) {
-      const beforeText = content.substring(lastIndex, match.index);
+      let beforeText = content.substring(lastIndex, match.index);
+
+      // Check if we need to add a space before the keyword
+      // If beforeText ends with an alphanumeric character (no space), add one
+      if (beforeText && /[a-zA-Z0-9,]$/.test(beforeText)) {
+        beforeText += ' ';
+      }
+
       if (beforeText) {
         runs.push(new TextRun({
           text: cleanMarkdownEscapes(beforeText),
@@ -1285,6 +1374,22 @@ function parseKeywordMarkersToTextRuns(
     }
 
     lastIndex = match.index + match[0].length;
+
+    // Check if we need a space AFTER the keyword
+    // Look ahead to see if next character is alphanumeric (needs space)
+    if (lastIndex < content.length) {
+      const nextChar = content[lastIndex];
+      if (nextChar && /[a-zA-Z0-9]/.test(nextChar)) {
+        // Add a space run before the next content
+        runs.push(new TextRun({
+          text: ' ',
+          font: FONT,
+          size: baseStyle.size || FONT_SIZES.BODY,
+          bold: baseStyle.bold,
+          color: baseStyle.color,
+        }));
+      }
+    }
   }
 
   // Add any remaining text after the last marker
