@@ -165,72 +165,109 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
     console.log('[Surfer Parser] Looking for expand buttons...');
 
     try {
-      // First, specifically look for and click the "Terms to Use" section's "Show details" button
-      // This is critical for SurferSEO shared audit pages
-      const clickedTermsDetails = await page.evaluate(() => {
-        // Find all buttons with "Show details" text
-        const buttons = Array.from(document.querySelectorAll('button'));
-        let clickedTerms = false;
-
-        for (const btn of buttons) {
-          const text = (btn.textContent || '').toLowerCase().trim();
-
-          // Look for "show details" button near "Terms to Use" section
-          if (text === 'show details') {
-            // Check if this button is in a section related to terms
-            const parentSection = btn.closest('[class*="section"], [class*="card"], div');
-            const sectionText = parentSection?.textContent || '';
-
-            if (sectionText.includes('Terms to Use') || sectionText.includes('important terms')) {
-              try {
-                (btn as HTMLElement).click();
-                clickedTerms = true;
-                console.log('Clicked Terms to Use Show details button');
-              } catch (e) {
-                // Continue
-              }
-            }
-          }
+      // STEP 1: Scroll down to find the Terms section (it may be below the fold)
+      await page.evaluate(() => {
+        // Scroll down in increments to trigger lazy loading
+        const scrollStep = 500;
+        const maxScroll = 3000;
+        for (let y = 0; y < maxScroll; y += scrollStep) {
+          window.scrollTo(0, y);
         }
-
-        // If we didn't find the specific terms button, click all "Show details" buttons
-        if (!clickedTerms) {
-          for (const btn of buttons) {
-            const text = (btn.textContent || '').toLowerCase().trim();
-            if (text === 'show details' || text.includes('show detail')) {
-              try {
-                (btn as HTMLElement).click();
-              } catch (e) {
-                // Continue
-              }
-            }
-          }
-        }
-
-        return clickedTerms;
+        // Scroll back to top
+        window.scrollTo(0, 0);
       });
 
-      // Wait for content to expand
-      await new Promise(resolve => setTimeout(resolve, 4000));
-      console.log('[Surfer Parser] Clicked expand buttons, waiting for content...');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      console.log('[Surfer Parser] Scrolled page to trigger lazy loading...');
 
-      // Click any remaining expand buttons
-      await page.evaluate(() => {
-        const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
+      // STEP 2: Look for Terms section by searching for "Terms" text
+      // and scroll it into view, then click its Show details button
+      const foundTermsSection = await page.evaluate(() => {
+        // Find all elements containing "Terms to Use" or "Important terms"
+        const allElements = Array.from(document.querySelectorAll('*'));
+        let termsSection: Element | null = null;
+        let termsButton: HTMLElement | null = null;
+
+        for (const el of allElements) {
+          // Only check direct text, not nested
+          const directText = Array.from(el.childNodes)
+            .filter(node => node.nodeType === Node.TEXT_NODE)
+            .map(node => node.textContent?.trim() || '')
+            .join(' ');
+
+          if (directText.includes('Terms to Use') || directText.includes('Important terms') ||
+              directText === 'Terms' || directText.includes('NLP Terms')) {
+            termsSection = el;
+
+            // Scroll this element into view
+            el.scrollIntoView({ behavior: 'auto', block: 'center' });
+
+            // Look for a Show details button nearby (sibling or parent's child)
+            const parent = el.parentElement;
+            if (parent) {
+              const buttons = parent.querySelectorAll('button');
+              for (const btn of buttons) {
+                const btnText = (btn.textContent || '').toLowerCase();
+                if (btnText.includes('show') || btnText.includes('detail') || btnText.includes('expand')) {
+                  termsButton = btn as HTMLElement;
+                  break;
+                }
+              }
+            }
+
+            // Also check siblings
+            if (!termsButton) {
+              let sibling = el.nextElementSibling;
+              while (sibling && !termsButton) {
+                if (sibling.tagName === 'BUTTON') {
+                  const btnText = (sibling.textContent || '').toLowerCase();
+                  if (btnText.includes('show') || btnText.includes('detail')) {
+                    termsButton = sibling as HTMLElement;
+                  }
+                }
+                const btns = sibling.querySelectorAll('button');
+                for (const btn of btns) {
+                  const btnText = (btn.textContent || '').toLowerCase();
+                  if (btnText.includes('show') || btnText.includes('detail')) {
+                    termsButton = btn as HTMLElement;
+                    break;
+                  }
+                }
+                sibling = sibling.nextElementSibling;
+              }
+            }
+
+            break;
+          }
+        }
+
+        // Click the terms button if found
+        if (termsButton) {
+          termsButton.click();
+          console.log('Clicked Terms section Show details button');
+          return { found: true, clicked: true };
+        } else if (termsSection) {
+          console.log('Found Terms section but no button');
+          return { found: true, clicked: false };
+        }
+
+        return { found: false, clicked: false };
+      });
+
+      console.log('[Surfer Parser] Terms section search result:', JSON.stringify(foundTermsSection));
+
+      // Wait for content to expand
+      await new Promise(resolve => setTimeout(resolve, 3000));
+
+      // STEP 3: Click ALL "Show details" buttons on the page to ensure everything is expanded
+      const clickedCount = await page.evaluate(() => {
+        const buttons = Array.from(document.querySelectorAll('button'));
         let clicked = 0;
 
         for (const btn of buttons) {
-          const text = (btn.textContent || '').toLowerCase();
-          const ariaExpanded = btn.getAttribute('aria-expanded');
-
-          // Click buttons that look like expand buttons
-          if (
-            text.includes('show') ||
-            text.includes('expand') ||
-            text.includes('detail') ||
-            text.includes('more') ||
-            ariaExpanded === 'false'
-          ) {
+          const text = (btn.textContent || '').toLowerCase().trim();
+          if (text === 'show details' || text === 'show detail' || text === 'expand' ||
+              text.includes('show all') || text.includes('view all')) {
             try {
               (btn as HTMLElement).click();
               clicked++;
@@ -240,11 +277,43 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
           }
         }
 
+        // Also click any collapsed accordion/expandable elements
+        const expandables = document.querySelectorAll('[aria-expanded="false"], [data-state="closed"]');
+        for (const el of expandables) {
+          try {
+            (el as HTMLElement).click();
+            clicked++;
+          } catch (e) {
+            // Continue
+          }
+        }
+
         return clicked;
       });
 
+      console.log('[Surfer Parser] Clicked', clickedCount, 'expand buttons');
+
       // Wait for content to expand
-      await new Promise(resolve => setTimeout(resolve, 3000));
+      await new Promise(resolve => setTimeout(resolve, 4000));
+
+      // STEP 4: Scroll down again to ensure all content is loaded
+      await page.evaluate(() => {
+        window.scrollTo(0, document.body.scrollHeight);
+      });
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+      // Scroll back to find terms section
+      await page.evaluate(() => {
+        const allElements = Array.from(document.querySelectorAll('*'));
+        for (const el of allElements) {
+          if (el.textContent?.includes('Terms to Use') || el.textContent?.includes('NLP')) {
+            el.scrollIntoView({ behavior: 'auto', block: 'start' });
+            break;
+          }
+        }
+      });
+      await new Promise(resolve => setTimeout(resolve, 1000));
+
     } catch (err) {
       console.log('[Surfer Parser] Could not click expand buttons:', err);
     }
