@@ -149,6 +149,7 @@ export interface AnalyzeRequest {
 // SurferSEO Report Types
 export interface SurferSEOReport {
   url: string;
+  auditedUrl?: string;
   targetKeyword: string;
   contentScore: number;
   wordCountTarget: {
@@ -176,6 +177,11 @@ export interface SurferKeyword {
     recommended: number;
   };
   currentUsage?: number;
+  currentCount?: number | null;
+  status?: 'missing' | 'low' | 'good' | 'overused' | 'unknown';
+  action?: string | null;
+  relevance?: number | null;
+  isNLP?: boolean;
 }
 
 export interface SurferNLPTerm {
@@ -183,6 +189,9 @@ export interface SurferNLPTerm {
   relevance: number;
   usageTarget: number;
   currentUsage?: number;
+  currentCount?: number | null;
+  status?: 'missing' | 'low' | 'good' | 'overused' | 'unknown';
+  action?: string | null;
 }
 
 export interface SurferCompetitor {

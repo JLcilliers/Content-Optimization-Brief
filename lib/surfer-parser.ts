@@ -2,9 +2,14 @@ import puppeteer, { Browser } from 'puppeteer-core';
 
 export interface SurferTerm {
   term: string;
+  isNLP: boolean;
   currentCount: number | null;
   recommendedMin: number | null;
   recommendedMax: number | null;
+  competitorMin: number | null;
+  competitorMax: number | null;
+  relevance: number | null;
+  action: string | null;
   status: 'missing' | 'low' | 'good' | 'overused' | 'unknown';
 }
 
@@ -12,9 +17,11 @@ export interface SurferReportData {
   success: boolean;
   mainKeyword: string;
   url: string;
+  auditedUrl: string;
   contentScore: number | null;
   wordCount: number | null;
   terms: SurferTerm[];
+  nlpTerms: SurferTerm[];
   questions: string[];
   headings: string[];
   error?: string;
@@ -74,9 +81,11 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
       success: false,
       mainKeyword: '',
       url: reportUrl,
+      auditedUrl: '',
       contentScore: null,
       wordCount: null,
       terms: [],
+      nlpTerms: [],
       questions: [],
       headings: [],
       error: 'Invalid URL. Must be a SurferSEO audit link.'
@@ -252,13 +261,19 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
     const extractedData = await page.evaluate(() => {
       const data: {
         mainKeyword: string;
+        auditedUrl: string;
         contentScore: number | null;
         wordCount: number | null;
         terms: Array<{
           term: string;
+          isNLP: boolean;
           currentCount: number | null;
           recommendedMin: number | null;
           recommendedMax: number | null;
+          competitorMin: number | null;
+          competitorMax: number | null;
+          relevance: number | null;
+          action: string | null;
           status: string;
         }>;
         questions: string[];
@@ -266,6 +281,7 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
         extractionMethod: string;
       } = {
         mainKeyword: '',
+        auditedUrl: '',
         contentScore: null,
         wordCount: null,
         terms: [],
@@ -290,6 +306,12 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
       const titleMatch = pageTitle.match(/\|\s*([^·]+)\s*·\s*Audit/i);
       if (titleMatch && titleMatch[1]) {
         data.mainKeyword = titleMatch[1].trim();
+      }
+
+      // Extract audited URL from page title (format: "https://url.com/page | keyword · Audit · Surfer")
+      const urlMatch = pageTitle.match(/^(https?:\/\/[^\s|]+)/i);
+      if (urlMatch && urlMatch[1]) {
+        data.auditedUrl = urlMatch[1].trim();
       }
 
       // Fallback: Look for keyword in the header area
@@ -369,20 +391,25 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
 
           const cells = row.querySelectorAll('[role="cell"]');
           if (cells.length >= 4) {
-            // SurferSEO table structure:
+            // SurferSEO table structure (from CSV export):
             // Cell 0: Term (may include "NLP" badge)
             // Cell 1: Examples count
             // Cell 2: Your count ("You")
             // Cell 3: Suggested count
             // Cell 4: Sentiment (optional)
-            // Cell 5: Relevance
+            // Cell 5: Relevance (%)
             // Cell 6: Search Volume
-            // Cell 7: Action
+            // Cell 7: Action (e.g., "Add 1", "Add 2-7")
 
             const termCell = cells[0];
+            const termCellText = termCell?.textContent?.trim() || '';
+
+            // Check if term has NLP badge
+            const isNLP = termCellText.toLowerCase().includes('nlp') ||
+                          !!termCell?.querySelector('[class*="nlp" i], [class*="badge" i]');
+
             // Remove "NLP" badge text from term
-            let termText = termCell?.textContent?.trim() || '';
-            termText = termText.replace(/\s*NLP\s*$/i, '').trim();
+            let termText = termCellText.replace(/\s*NLP\s*$/i, '').trim();
 
             // Get "You" count (cell index 2)
             const yourCountText = cells[2]?.textContent?.trim() || '0';
@@ -390,6 +417,32 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
 
             // Get "Suggested" count (cell index 3)
             const suggestedText = cells[3]?.textContent?.trim() || '1';
+
+            // Get Relevance (cell index 5 if exists)
+            let relevance: number | null = null;
+            if (cells.length >= 6) {
+              const relevanceText = cells[5]?.textContent?.trim() || '';
+              const relevanceMatch = relevanceText.match(/([\d.]+)%?/);
+              if (relevanceMatch) {
+                const relValue = parseFloat(relevanceMatch[1]);
+                // If value is between 0 and 1, it's already a decimal
+                // If value is between 1 and 100, convert to decimal
+                relevance = relValue > 1 ? relValue / 100 : relValue;
+              }
+            }
+
+            // Get Action (last cell typically)
+            let action: string | null = null;
+            if (cells.length >= 8) {
+              action = cells[7]?.textContent?.trim() || null;
+            } else if (cells.length >= 1) {
+              // Try last cell
+              const lastCell = cells[cells.length - 1];
+              const lastCellText = lastCell?.textContent?.trim() || '';
+              if (lastCellText.toLowerCase().startsWith('add')) {
+                action = lastCellText;
+              }
+            }
 
             if (termText && termText.length > 1 && termText.length < 100 && !termText.match(/^\d+$/)) {
               let recommendedMin: number | null = null;
@@ -423,9 +476,14 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
 
               data.terms.push({
                 term: termText,
+                isNLP,
                 currentCount: yourCount,
                 recommendedMin,
                 recommendedMax,
+                competitorMin: null, // Not available in shared audit table view
+                competitorMax: null,
+                relevance,
+                action,
                 status
               });
             }
@@ -444,7 +502,9 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
             const cells = row.querySelectorAll('td');
             if (cells.length >= 2) {
               const termCell = cells[0];
-              const termText = termCell?.textContent?.trim().replace(/\s*NLP\s*$/i, '').trim() || '';
+              const termCellText = termCell?.textContent?.trim() || '';
+              const isNLP = termCellText.toLowerCase().includes('nlp');
+              const termText = termCellText.replace(/\s*NLP\s*$/i, '').trim();
 
               // Get count from various cell positions
               let yourCount = '0';
@@ -493,9 +553,14 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
 
                 data.terms.push({
                   term: termText,
+                  isNLP,
                   currentCount,
                   recommendedMin,
                   recommendedMax,
+                  competitorMin: null,
+                  competitorMax: null,
+                  relevance: null,
+                  action: null,
                   status
                 });
               }
@@ -518,9 +583,10 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
           const termMatch = text.match(/^(.+?)\s*(?:(\d+)\s*\/\s*(\d+)|(\d+)\s*-\s*(\d+)|\((\d+)\s*-\s*(\d+)\))?$/);
 
           if (termMatch) {
-            const term = termMatch[1].replace(/[•\-\*]/g, '').trim();
+            const term = termMatch[1].replace(/[•\-\*]/g, '').replace(/\s*NLP\s*$/i, '').trim();
             if (term.length < 2) return;
 
+            const isNLP = text.toLowerCase().includes('nlp');
             let currentCount: number | null = null;
             let recommendedMin: number | null = null;
             let recommendedMax: number | null = null;
@@ -551,9 +617,14 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
 
             data.terms.push({
               term,
+              isNLP,
               currentCount,
               recommendedMin,
               recommendedMax,
+              competitorMin: null,
+              competitorMax: null,
+              relevance: null,
+              action: null,
               status
             });
           }
@@ -567,7 +638,7 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
         rowDivs.forEach(row => {
           const children = row.querySelectorAll('div, span');
           if (children.length >= 2) {
-            const termText = children[0]?.textContent?.trim();
+            const termText = children[0]?.textContent?.trim()?.replace(/\s*NLP\s*$/i, '');
             const countText = children[1]?.textContent?.trim() || '';
 
             if (termText && termText.length > 1 && termText.length < 80 && !termText.match(/^\d+$/)) {
@@ -575,9 +646,14 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
               if (countMatch || termText.length < 40) {
                 data.terms.push({
                   term: termText,
+                  isNLP: false,
                   currentCount: countMatch ? parseInt(countMatch[1]) : null,
                   recommendedMin: null,
                   recommendedMax: countMatch ? parseInt(countMatch[2]) : null,
+                  competitorMin: null,
+                  competitorMax: null,
+                  relevance: null,
+                  action: null,
                   status: 'unknown'
                 });
               }
@@ -596,10 +672,15 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
             const match = text.match(/^(.+?)\s*(\d+)\s*\/\s*(\d+)$/);
             if (match) {
               data.terms.push({
-                term: match[1].trim(),
+                term: match[1].trim().replace(/\s*NLP\s*$/i, ''),
+                isNLP: false,
                 currentCount: parseInt(match[2]),
                 recommendedMin: null,
                 recommendedMax: parseInt(match[3]),
+                competitorMin: null,
+                competitorMax: null,
+                relevance: null,
+                action: null,
                 status: 'unknown'
               });
             }
@@ -621,9 +702,14 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
             seenTerms.add(termLower);
             data.terms.push({
               term,
+              isNLP: false,
               currentCount: parseInt(match[2]),
               recommendedMin: null,
               recommendedMax: parseInt(match[3]),
+              competitorMin: null,
+              competitorMax: null,
+              relevance: null,
+              action: null,
               status: 'unknown'
             });
           }
@@ -722,20 +808,26 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
       return true;
     }) as SurferTerm[];
 
+    // Separate NLP terms from regular terms
+    const regularTerms = uniqueTerms.filter(t => !t.isNLP);
+    const nlpTerms = uniqueTerms.filter(t => t.isNLP);
+
     // Deduplicate questions
     const uniqueQuestions = [...new Set(extractedData.questions)];
 
     debugInfo.extractionMethod = extractedData.extractionMethod;
     console.log(`[Surfer Parser] Extraction method: ${extractedData.extractionMethod}`);
-    console.log(`[Surfer Parser] Extracted ${uniqueTerms.length} terms, ${uniqueQuestions.length} questions`);
+    console.log(`[Surfer Parser] Extracted ${regularTerms.length} terms, ${nlpTerms.length} NLP terms, ${uniqueQuestions.length} questions`);
 
     return {
       success: uniqueTerms.length > 0,
       mainKeyword: extractedData.mainKeyword,
       url: reportUrl,
+      auditedUrl: extractedData.auditedUrl,
       contentScore: extractedData.contentScore,
       wordCount: extractedData.wordCount,
-      terms: uniqueTerms,
+      terms: regularTerms,
+      nlpTerms: nlpTerms,
       questions: uniqueQuestions,
       headings: extractedData.headings,
       debug: debugInfo
@@ -748,9 +840,11 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
       success: false,
       mainKeyword: '',
       url: reportUrl,
+      auditedUrl: '',
       contentScore: null,
       wordCount: null,
       terms: [],
+      nlpTerms: [],
       questions: [],
       headings: [],
       error: errorMessage,

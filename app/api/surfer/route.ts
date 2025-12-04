@@ -38,9 +38,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Combine regular terms and NLP terms for the full list
+    const allTerms = [...result.terms, ...result.nlpTerms];
+
     // Convert parsed data to SurferSEOReport format
     const surferReport: SurferSEOReport = {
       url: result.url,
+      auditedUrl: result.auditedUrl,
       targetKeyword: result.mainKeyword,
       contentScore: result.contentScore || 0,
       wordCountTarget: {
@@ -52,7 +56,7 @@ export async function POST(request: NextRequest) {
         h2Count: { min: 3, max: 10, recommended: 6 },
         h3Count: { min: 2, max: 15, recommended: 8 },
       },
-      keywords: result.terms.map((term, index) => ({
+      keywords: allTerms.map((term, index) => ({
         term: term.term,
         importance: index < 5 ? 'high' as const : index < 15 ? 'medium' as const : 'low' as const,
         usageTarget: {
@@ -62,11 +66,19 @@ export async function POST(request: NextRequest) {
             ? Math.round((term.recommendedMin + term.recommendedMax) / 2)
             : 2,
         },
+        currentCount: term.currentCount,
+        status: term.status,
+        action: term.action,
+        relevance: term.relevance,
+        isNLP: term.isNLP,
       })),
-      nlpTerms: result.terms.slice(0, 20).map((term, index) => ({
+      nlpTerms: result.nlpTerms.map((term, index) => ({
         term: term.term,
-        relevance: Math.max(0.3, 1 - (index * 0.03)),
+        relevance: term.relevance ?? Math.max(0.3, 1 - (index * 0.03)),
         usageTarget: term.recommendedMax || Math.max(1, 3 - Math.floor(index / 5)),
+        currentCount: term.currentCount,
+        status: term.status,
+        action: term.action,
       })),
       questions: result.questions,
       competitors: [],
@@ -76,7 +88,7 @@ export async function POST(request: NextRequest) {
     // Convert to KeywordData format for the main analyzer
     const keywords = convertToKeywordData(surferReport);
 
-    console.log(`[Surfer API] Extracted ${result.terms.length} terms, ${result.questions.length} questions`);
+    console.log(`[Surfer API] Extracted ${result.terms.length} terms, ${result.nlpTerms.length} NLP terms, ${result.questions.length} questions`);
 
     return NextResponse.json({
       success: true,
