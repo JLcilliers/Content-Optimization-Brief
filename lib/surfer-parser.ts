@@ -143,7 +143,56 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
     console.log('[Surfer Parser] Looking for expand buttons...');
 
     try {
-      // Click all buttons that might expand content
+      // First, specifically look for and click the "Terms to Use" section's "Show details" button
+      // This is critical for SurferSEO shared audit pages
+      const clickedTermsDetails = await page.evaluate(() => {
+        // Find all buttons with "Show details" text
+        const buttons = Array.from(document.querySelectorAll('button'));
+        let clickedTerms = false;
+
+        for (const btn of buttons) {
+          const text = (btn.textContent || '').toLowerCase().trim();
+
+          // Look for "show details" button near "Terms to Use" section
+          if (text === 'show details') {
+            // Check if this button is in a section related to terms
+            const parentSection = btn.closest('[class*="section"], [class*="card"], div');
+            const sectionText = parentSection?.textContent || '';
+
+            if (sectionText.includes('Terms to Use') || sectionText.includes('important terms')) {
+              try {
+                (btn as HTMLElement).click();
+                clickedTerms = true;
+                console.log('Clicked Terms to Use Show details button');
+              } catch (e) {
+                // Continue
+              }
+            }
+          }
+        }
+
+        // If we didn't find the specific terms button, click all "Show details" buttons
+        if (!clickedTerms) {
+          for (const btn of buttons) {
+            const text = (btn.textContent || '').toLowerCase().trim();
+            if (text === 'show details' || text.includes('show detail')) {
+              try {
+                (btn as HTMLElement).click();
+              } catch (e) {
+                // Continue
+              }
+            }
+          }
+        }
+
+        return clickedTerms;
+      });
+
+      // Wait for content to expand
+      await new Promise(resolve => setTimeout(resolve, 4000));
+      console.log('[Surfer Parser] Clicked expand buttons, waiting for content...');
+
+      // Click any remaining expand buttons
       await page.evaluate(() => {
         const buttons = Array.from(document.querySelectorAll('button, [role="button"]'));
         let clicked = 0;
@@ -174,7 +223,6 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
 
       // Wait for content to expand
       await new Promise(resolve => setTimeout(resolve, 3000));
-      console.log('[Surfer Parser] Clicked expand buttons, waiting for content...');
     } catch (err) {
       console.log('[Surfer Parser] Could not click expand buttons:', err);
     }
@@ -232,11 +280,30 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
         return el?.textContent?.trim() || '';
       };
 
-      // 1. Try to get main keyword from SurferSEO header
-      const headerText = document.querySelector('header, nav, [class*="header"]')?.textContent || '';
-      const headerKeywordMatch = headerText.match(/\/\s*[^\s]*\s+([^h]+?)(?:https?:|$)/i);
-      if (headerKeywordMatch && headerKeywordMatch[1]) {
-        data.mainKeyword = headerKeywordMatch[1].trim();
+      // 1. Try to get main keyword from SurferSEO shared audit page
+      // The page structure shows: "Audit / [flag] keyword https://url"
+      // Look for text between flag image and URL
+      const allText = document.body.innerText;
+
+      // Try to extract from page title first (format: "URL | keyword · Audit · Surfer")
+      const pageTitle = document.title;
+      const titleMatch = pageTitle.match(/\|\s*([^·]+)\s*·\s*Audit/i);
+      if (titleMatch && titleMatch[1]) {
+        data.mainKeyword = titleMatch[1].trim();
+      }
+
+      // Fallback: Look for keyword in the header area
+      if (!data.mainKeyword) {
+        // SurferSEO header typically shows "Audit / [flag] keyword URL"
+        const headerElement = document.querySelector('[class*="header"], header, nav');
+        if (headerElement) {
+          const headerText = headerElement.textContent || '';
+          // Pattern: after "Audit" and "/" but before "http"
+          const auditMatch = headerText.match(/Audit\s*\/\s*([^h]+?)(?:https?:|$)/i);
+          if (auditMatch && auditMatch[1]) {
+            data.mainKeyword = auditMatch[1].replace(/[^\w\s]/g, ' ').trim();
+          }
+        }
       }
 
       // Fallback to other selectors
@@ -244,7 +311,7 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
         const keywordSelectors = ['h1', '[class*="keyword" i]', '[class*="query" i]'];
         for (const sel of keywordSelectors) {
           const text = getText(sel);
-          if (text && text.length < 100 && !text.includes('\n') && !text.includes('http')) {
+          if (text && text.length < 100 && text.length > 2 && !text.includes('\n') && !text.includes('http')) {
             data.mainKeyword = text;
             break;
           }
@@ -252,70 +319,102 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
       }
 
       // 2. Try to get content score
-      const scoreMatch = document.body.innerText.match(/(\d{1,2})\s*\/\s*100/);
-      if (scoreMatch) {
-        data.contentScore = parseInt(scoreMatch[1]);
+      // SurferSEO format: "Your Content Score is X." or "Content Score is X"
+      const scorePatterns = [
+        /Content Score is\s*(\d{1,3})/i,
+        /(\d{1,3})\s*\/\s*100/,
+        /score[:\s]+(\d{1,3})/i
+      ];
+
+      for (const pattern of scorePatterns) {
+        const scoreMatch = allText.match(pattern);
+        if (scoreMatch) {
+          const score = parseInt(scoreMatch[1]);
+          if (score >= 0 && score <= 100) {
+            data.contentScore = score;
+            break;
+          }
+        }
       }
 
       // 3. Try to get word count
-      const wordCountRegex = /(\d{1,5})\s*words?/i;
-      const bodyText = document.body.textContent || '';
-      const wordMatch = bodyText.match(wordCountRegex);
-      if (wordMatch) {
-        data.wordCount = parseInt(wordMatch[1]);
+      // SurferSEO format: "X words in body" or "Add X-Y words in body"
+      const wordCountPatterns = [
+        /(\d{1,5})\s*words?\s*in\s*body/i,
+        /body.*?(\d{1,5})\s*words/i,
+        /(\d{1,5})\s*words?\b/i
+      ];
+
+      for (const pattern of wordCountPatterns) {
+        const wordMatch = allText.match(pattern);
+        if (wordMatch) {
+          const count = parseInt(wordMatch[1]);
+          if (count > 0 && count < 100000) {
+            data.wordCount = count;
+            break;
+          }
+        }
       }
 
-      // STRATEGY 1: Extract from table rows (most reliable for SurferSEO)
-      const tableRows = document.querySelectorAll('tr');
-      if (tableRows.length > 1) {
-        data.extractionMethod = 'table-rows';
-        tableRows.forEach((row, index) => {
-          if (index === 0) return; // Skip header row
+      // STRATEGY 0: Extract from SurferSEO's ARIA-based table (shared audit pages)
+      // SurferSEO uses role="row" and role="cell" for accessibility
+      const ariaRows = document.querySelectorAll('[role="row"]');
+      if (ariaRows.length > 1) {
+        data.extractionMethod = 'aria-table';
+        ariaRows.forEach((row, index) => {
+          if (index === 0) return; // Skip header row (columnheader)
 
-          const cells = row.querySelectorAll('td');
-          if (cells.length >= 2) {
+          // Check if this row has columnheaders (it's a header row)
+          if (row.querySelector('[role="columnheader"]')) return;
+
+          const cells = row.querySelectorAll('[role="cell"]');
+          if (cells.length >= 4) {
+            // SurferSEO table structure:
+            // Cell 0: Term (may include "NLP" badge)
+            // Cell 1: Examples count
+            // Cell 2: Your count ("You")
+            // Cell 3: Suggested count
+            // Cell 4: Sentiment (optional)
+            // Cell 5: Relevance
+            // Cell 6: Search Volume
+            // Cell 7: Action
+
             const termCell = cells[0];
-            const termText = termCell?.textContent?.trim().replace('NLP', '').trim() || '';
+            // Remove "NLP" badge text from term
+            let termText = termCell?.textContent?.trim() || '';
+            termText = termText.replace(/\s*NLP\s*$/i, '').trim();
 
-            // Get count from various cell positions
-            let yourCount = '0';
-            let suggestedCount = '1';
+            // Get "You" count (cell index 2)
+            const yourCountText = cells[2]?.textContent?.trim() || '0';
+            const yourCount = parseInt(yourCountText) || 0;
 
-            if (cells.length >= 4) {
-              yourCount = cells[2]?.textContent?.trim() || '0';
-              suggestedCount = cells[3]?.textContent?.trim() || '1';
-            } else if (cells.length >= 2) {
-              const countText = cells[1]?.textContent?.trim() || '';
-              const countMatch = countText.match(/(\d+)\s*\/\s*(\d+)/);
-              if (countMatch) {
-                yourCount = countMatch[1];
-                suggestedCount = countMatch[2];
-              }
-            }
+            // Get "Suggested" count (cell index 3)
+            const suggestedText = cells[3]?.textContent?.trim() || '1';
 
             if (termText && termText.length > 1 && termText.length < 100 && !termText.match(/^\d+$/)) {
               let recommendedMin: number | null = null;
               let recommendedMax: number | null = null;
 
-              const rangeMatch = suggestedCount.match(/(\d+)\s*-\s*(\d+)/);
+              // Parse suggested range (e.g., "2-7" or "1")
+              const rangeMatch = suggestedText.match(/(\d+)\s*-\s*(\d+)/);
               if (rangeMatch) {
                 recommendedMin = parseInt(rangeMatch[1]);
                 recommendedMax = parseInt(rangeMatch[2]);
               } else {
-                const singleMatch = suggestedCount.match(/(\d+)/);
+                const singleMatch = suggestedText.match(/(\d+)/);
                 if (singleMatch) {
-                  recommendedMin = 1;
-                  recommendedMax = parseInt(singleMatch[1]);
+                  const suggested = parseInt(singleMatch[1]);
+                  recommendedMin = suggested;
+                  recommendedMax = suggested;
                 }
               }
 
-              const currentCount = parseInt(yourCount) || 0;
-
+              // Determine status based on current vs recommended
               let status = 'missing';
-              if (currentCount > 0) {
-                if (recommendedMin && recommendedMax) {
-                  if (currentCount < recommendedMin) status = 'low';
-                  else if (currentCount > recommendedMax) status = 'overused';
+              if (yourCount > 0) {
+                if (recommendedMin !== null && recommendedMax !== null) {
+                  if (yourCount < recommendedMin) status = 'low';
+                  else if (yourCount > recommendedMax) status = 'overused';
                   else status = 'good';
                 } else {
                   status = 'good';
@@ -324,7 +423,7 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
 
               data.terms.push({
                 term: termText,
-                currentCount,
+                currentCount: yourCount,
                 recommendedMin,
                 recommendedMax,
                 status
@@ -332,6 +431,77 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
             }
           }
         });
+      }
+
+      // STRATEGY 1: Extract from table rows (fallback for traditional HTML tables)
+      if (data.terms.length === 0) {
+        const tableRows = document.querySelectorAll('tr');
+        if (tableRows.length > 1) {
+          data.extractionMethod = 'table-rows';
+          tableRows.forEach((row, index) => {
+            if (index === 0) return; // Skip header row
+
+            const cells = row.querySelectorAll('td');
+            if (cells.length >= 2) {
+              const termCell = cells[0];
+              const termText = termCell?.textContent?.trim().replace(/\s*NLP\s*$/i, '').trim() || '';
+
+              // Get count from various cell positions
+              let yourCount = '0';
+              let suggestedCount = '1';
+
+              if (cells.length >= 4) {
+                yourCount = cells[2]?.textContent?.trim() || '0';
+                suggestedCount = cells[3]?.textContent?.trim() || '1';
+              } else if (cells.length >= 2) {
+                const countText = cells[1]?.textContent?.trim() || '';
+                const countMatch = countText.match(/(\d+)\s*\/\s*(\d+)/);
+                if (countMatch) {
+                  yourCount = countMatch[1];
+                  suggestedCount = countMatch[2];
+                }
+              }
+
+              if (termText && termText.length > 1 && termText.length < 100 && !termText.match(/^\d+$/)) {
+                let recommendedMin: number | null = null;
+                let recommendedMax: number | null = null;
+
+                const rangeMatch = suggestedCount.match(/(\d+)\s*-\s*(\d+)/);
+                if (rangeMatch) {
+                  recommendedMin = parseInt(rangeMatch[1]);
+                  recommendedMax = parseInt(rangeMatch[2]);
+                } else {
+                  const singleMatch = suggestedCount.match(/(\d+)/);
+                  if (singleMatch) {
+                    recommendedMin = 1;
+                    recommendedMax = parseInt(singleMatch[1]);
+                  }
+                }
+
+                const currentCount = parseInt(yourCount) || 0;
+
+                let status = 'missing';
+                if (currentCount > 0) {
+                  if (recommendedMin && recommendedMax) {
+                    if (currentCount < recommendedMin) status = 'low';
+                    else if (currentCount > recommendedMax) status = 'overused';
+                    else status = 'good';
+                  } else {
+                    status = 'good';
+                  }
+                }
+
+                data.terms.push({
+                  term: termText,
+                  currentCount,
+                  recommendedMin,
+                  recommendedMax,
+                  status
+                });
+              }
+            }
+          });
+        }
       }
 
       // STRATEGY 2: Look for elements with "term" in class name
