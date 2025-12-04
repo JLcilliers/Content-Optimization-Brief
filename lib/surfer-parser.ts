@@ -46,6 +46,11 @@ let usingBrowserless = false;
 async function getBrowser(): Promise<Browser> {
   const browserlessToken = process.env.BROWSERLESS_TOKEN;
 
+  console.log('[Surfer Parser] getBrowser called');
+  console.log('[Surfer Parser] BROWSERLESS_TOKEN exists:', !!browserlessToken);
+  console.log('[Surfer Parser] BROWSERLESS_TOKEN length:', browserlessToken?.length || 0);
+  console.log('[Surfer Parser] NODE_ENV:', process.env.NODE_ENV);
+
   // Production: Use Browserless.io cloud browser with stealth mode
   if (browserlessToken) {
     console.log('[Surfer Parser] Connecting to Browserless.io with stealth mode...');
@@ -54,9 +59,16 @@ async function getBrowser(): Promise<Browser> {
     // Add stealth and block detection params
     const wsEndpoint = `wss://chrome.browserless.io?token=${browserlessToken}&stealth=true&blockAds=true`;
 
-    return puppeteer.connect({
-      browserWSEndpoint: wsEndpoint,
-    });
+    try {
+      const browser = await puppeteer.connect({
+        browserWSEndpoint: wsEndpoint,
+      });
+      console.log('[Surfer Parser] Successfully connected to Browserless.io');
+      return browser;
+    } catch (connectError) {
+      console.error('[Surfer Parser] Failed to connect to Browserless.io:', connectError);
+      throw connectError;
+    }
   }
 
   // Local development: Use local Puppeteer
@@ -71,6 +83,7 @@ async function getBrowser(): Promise<Browser> {
     });
   }
 
+  console.error('[Surfer Parser] No BROWSERLESS_TOKEN and not in development mode');
   throw new Error('BROWSERLESS_TOKEN environment variable is required in production');
 }
 

@@ -6,12 +6,17 @@ import type { SurferSEOReport, KeywordData } from '@/types';
 export const maxDuration = 60;
 
 export async function POST(request: NextRequest) {
+  console.log('[Surfer API] Request received');
+
   try {
     const body = await request.json();
+    console.log('[Surfer API] Request body:', JSON.stringify(body));
+
     const { surferUrl } = body;
 
     // Validate SurferSEO URL
     if (!surferUrl) {
+      console.log('[Surfer API] No surferUrl provided');
       return NextResponse.json(
         { success: false, error: 'SurferSEO report URL is required' },
         { status: 400 }
@@ -20,6 +25,7 @@ export async function POST(request: NextRequest) {
 
     // Validate it's a SurferSEO URL
     if (!surferUrl.includes('surferseo.com') && !surferUrl.includes('app.surferseo.com')) {
+      console.log('[Surfer API] Invalid URL format:', surferUrl);
       return NextResponse.json(
         { success: false, error: 'Please provide a valid SurferSEO report URL (e.g., https://app.surferseo.com/...)' },
         { status: 400 }
@@ -29,7 +35,19 @@ export async function POST(request: NextRequest) {
     console.log('[Surfer API] Starting Puppeteer-based parsing for:', surferUrl);
 
     // Use Puppeteer-based parser for better extraction
-    const result = await parseSurferAuditReport(surferUrl);
+    let result;
+    try {
+      result = await parseSurferAuditReport(surferUrl);
+      console.log('[Surfer API] Parser returned:', {
+        success: result.success,
+        termCount: result.terms?.length || 0,
+        nlpTermCount: result.nlpTerms?.length || 0,
+        error: result.error
+      });
+    } catch (parseError) {
+      console.error('[Surfer API] Parser threw exception:', parseError);
+      throw parseError;
+    }
 
     if (!result.success) {
       return NextResponse.json(
@@ -99,10 +117,17 @@ export async function POST(request: NextRequest) {
     });
 
   } catch (error) {
-    console.error('SurferSEO parsing error:', error);
+    console.error('[Surfer API] Unhandled error:', error);
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    console.error('[Surfer API] Error stack:', errorStack);
+
     return NextResponse.json(
-      { success: false, error: `Failed to parse SurferSEO report: ${errorMessage}` },
+      {
+        success: false,
+        error: `Failed to parse SurferSEO report: ${errorMessage}`,
+        details: process.env.NODE_ENV === 'development' ? errorStack : undefined
+      },
       { status: 500 }
     );
   }
