@@ -67,6 +67,13 @@ const GENERIC_EXCLUSIONS = [
   '.pdf',
 ];
 
+// Regex patterns for invalid keywords
+const INVALID_KEYWORD_PATTERNS = [
+  /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/,  // IP addresses (e.g., 64.23.167.192)
+  /^\d+$/,                                   // Pure numbers
+  /^[^a-zA-Z]*$/,                            // No letters at all
+];
+
 /**
  * Extract page slug from URL for matching exclusion rules
  */
@@ -88,9 +95,17 @@ function extractPageSlug(url: string): string {
  * Check if a keyword should be excluded based on page context
  */
 function shouldExcludeKeyword(keyword: string, pageSlug: string): boolean {
-  const keywordLower = keyword.toLowerCase();
+  const keywordLower = keyword.toLowerCase().trim();
 
-  // Check generic exclusions first
+  // Check for invalid keyword patterns (IP addresses, pure numbers, etc.)
+  for (const pattern of INVALID_KEYWORD_PATTERNS) {
+    if (pattern.test(keywordLower)) {
+      console.log(`[keyword-processor] Excluding invalid keyword pattern: "${keyword}"`);
+      return true;
+    }
+  }
+
+  // Check generic exclusions
   for (const exclusion of GENERIC_EXCLUSIONS) {
     if (keywordLower.includes(exclusion)) {
       return true;
@@ -102,6 +117,7 @@ function shouldExcludeKeyword(keyword: string, pageSlug: string): boolean {
     if (pageSlug.includes(slugPattern) || slugPattern.includes(pageSlug)) {
       for (const exclusion of exclusions) {
         if (keywordLower.includes(exclusion.toLowerCase())) {
+          console.log(`[keyword-processor] Excluding wrong-page keyword: "${keyword}" (page: ${pageSlug})`);
           return true;
         }
       }

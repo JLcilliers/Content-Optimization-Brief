@@ -1095,13 +1095,21 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
     .replace(/\\\*/g, '*')
     .replace(/\\\[/g, '[')
     .replace(/\\\]/g, ']')
+    // Remove markdown image syntax: ![alt](url) or ![alt]
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '')      // ![alt](url)
+    .replace(/!\[[^\]]*\]/g, '')                  // ![alt]
+    .replace(/^!([A-Za-z][A-Za-z0-9 ]*)/gm, '')   // !AltText at start of line
     // Remove markdown links: [text](url) -> text
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    // Remove orphan brackets (but not our [[KEYWORD:]] markers)
+    .replace(/(?<!\[)\[(?!\[)([^\]]*)\](?!\])/g, '$1')  // Single [text] but not [[
     // Remove bold/italic markdown
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
     // Remove HTML tags
-    .replace(/<[^>]+>/g, '');
+    .replace(/<[^>]+>/g, '')
+    // Remove "Get a Quote" button text that might be captured
+    .replace(/^Get a Quote$/gm, '');
 
   // CRITICAL: Split structured markers onto their own lines if AI didn't add newlines
   // This handles cases where AI outputs: "[H1] Title [PARA] Content [H2] Heading"
@@ -1308,30 +1316,37 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
  * Pre-process content to ensure proper spacing around [[KEYWORD:]] markers
  * This fixes cases where AI outputs markers without spaces:
  * - "years,[[KEYWORD: AIM Insurance]]has" → "years, [[KEYWORD: AIM Insurance]] has"
+ * - "from[[KEYWORD: AIM]]today" → "from [[KEYWORD: AIM]] today"
+ *
+ * CRITICAL: This function must be called BEFORE parsing the markers!
  */
 function ensureSpacesAroundMarkers(content: string): string {
   let result = content;
 
-  // Add space BEFORE [[ if preceded by letter/number (not space, not opening bracket/paren)
-  result = result.replace(/([a-zA-Z0-9])(\[\[)/g, '$1 $2');
-
-  // Add space AFTER ]] if followed by letter/number (not space, not punctuation)
-  result = result.replace(/(\]\])([a-zA-Z0-9])/g, '$1 $2');
-
-  // Handle comma cases: ",[[" should become ", [["
+  // STEP 1: Add space BEFORE [[ marker
+  // Match any word character or comma before [[
+  result = result.replace(/(\w)(\[\[)/g, '$1 $2');
   result = result.replace(/,(\[\[)/g, ', $1');
-
-  // Handle period cases: ".[[" should become ". [["
   result = result.replace(/\.(\[\[)/g, '. $1');
-
-  // Handle colon cases: ":[[" should become ": [["
   result = result.replace(/:(\[\[)/g, ': $1');
-
-  // Handle semicolon cases: ";[[" should become "; [["
   result = result.replace(/;(\[\[)/g, '; $1');
+  result = result.replace(/\)(\[\[)/g, ') $1');
 
-  // Clean up any double spaces that might result
+  // STEP 2: Add space AFTER ]] marker
+  // Match ]] followed by any word character
+  result = result.replace(/(\]\])(\w)/g, '$1 $2');
+  // Also handle ]] followed by opening parenthesis
+  result = result.replace(/(\]\])(\()/g, '$1 $2');
+
+  // STEP 3: Clean up any double spaces
   result = result.replace(/  +/g, ' ');
+
+  // Debug: Log if any markers found without proper spacing
+  const badPatternBefore = /\w\[\[/g;
+  const badPatternAfter = /\]\]\w/g;
+  if (badPatternBefore.test(result) || badPatternAfter.test(result)) {
+    console.log('[doc-generator] WARNING: Some markers may still lack proper spacing');
+  }
 
   return result;
 }
