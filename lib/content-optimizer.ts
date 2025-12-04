@@ -14,78 +14,98 @@ export async function optimizeContent(
 
   const client = new Anthropic({ apiKey: anthropicApiKey });
 
-  const systemPrompt = `You are an expert SEO content specialist with deep knowledge of Google's algorithms, E-E-A-T principles, and modern AI search optimization. You write content that:
+  // The key change: Prompt focuses on PRESERVING original content with MINIMAL changes
+  const systemPrompt = `You are an SEO content optimizer. Your job is to make MINIMAL, SURGICAL changes to existing content to improve SEO rankings.
 
-1. Ranks well in traditional search
-2. Gets featured in AI overviews and featured snippets
-3. Sounds natural and human-written
-4. Provides genuine value to readers
-5. Integrates keywords seamlessly without stuffing
-6. Follows the client's brand voice and industry terminology
+## CRITICAL RULES - READ CAREFULLY:
 
-NEVER:
-- Stuff keywords unnaturally
-- Write generic filler content
-- Use clickbait or misleading statements
-- Ignore the existing page's purpose
-- Create duplicate content
+1. **PRESERVE 90%+ of the original content EXACTLY as written**
+2. **DO NOT rewrite paragraphs** - only insert keywords into existing sentences
+3. **DO NOT change the content structure** - keep the same sections and flow
+4. **DO NOT change the brand voice** or writing style
+5. **Make surgical, targeted changes** - not wholesale rewrites
 
-ALWAYS:
-- Maintain the page's original intent
-- Improve upon existing good content
-- Add value through better structure and clarity
-- Consider the user's search intent
-- Include actionable information
+## WHAT YOU CAN CHANGE:
+✅ Insert a target keyword naturally into an existing sentence
+✅ Slightly adjust a phrase to include a keyword (keep meaning identical)
+✅ Add a keyword to an existing heading
+✅ Add 1-2 NEW sentences ONLY if content is very thin on a topic (mark with [[NEW]])
+✅ Suggest adding an FAQ section at the end (mark entire section with [[NEW FAQ SECTION]])
+
+## WHAT YOU CANNOT CHANGE:
+❌ Rewrite entire paragraphs
+❌ Change the meaning or intent of any sentence
+❌ Add new sections in the middle of existing content
+❌ Remove or significantly alter existing content
+❌ Change the brand's voice, tone, or style
+❌ Restructure the page layout
+
+## OUTPUT FORMAT:
+Return the optimized content with change markers:
+- Use [[KEYWORD: term]] to mark where you inserted a keyword
+- Use [[ADJUSTED: original → new]] for slight phrase adjustments
+- Use [[NEW]] for any new sentences added
+- Use [[NEW FAQ SECTION]] to mark FAQs you've added
+
+Example of correct optimization:
+ORIGINAL: "We have been protecting educators for over 30 years."
+OPTIMIZED: "We have been protecting educators with [[KEYWORD: professional liability insurance]] for over 30 years."
+
+ORIGINAL: "Our team helps teachers every day."
+OPTIMIZED: "Our team helps [[ADJUSTED: teachers → educators and teachers]] with [[KEYWORD: liability coverage]] every day."
 
 Content Tone: ${settings.tone}
-Brand Name: ${settings.brandName || 'Not specified'}`;
+Brand Name: ${settings.brandName || 'The business'}`;
 
-  const userPrompt = `Analyze and optimize this webpage for SEO:
+  // First, send the original content to get the preserved + optimized version
+  const contentOptimizationPrompt = `Optimize this webpage content with MINIMAL changes. Preserve the original text and only insert keywords where they fit naturally.
 
-URL: ${crawledData.url}
-Current Title: ${crawledData.title}
-Current Meta Description: ${crawledData.metaDescription}
-Current H1: ${crawledData.h1.join(', ') || 'None'}
-Word Count: ${crawledData.wordCount}
+## ORIGINAL PAGE CONTENT:
+"""
+${crawledData.bodyContent.substring(0, 8000)}
+"""
 
-Current Content (excerpt):
-${crawledData.bodyContent.substring(0, 3000)}
+## CURRENT META ELEMENTS:
+- Title: ${crawledData.title}
+- Description: ${crawledData.metaDescription}
+- H1: ${crawledData.h1.join(', ') || 'None'}
 
-Target Keywords:
-Primary: ${keywords.primary.join(', ') || 'None provided'}
-Secondary: ${keywords.secondary.join(', ') || 'None provided'}
-NLP Terms: ${keywords.nlpTerms.join(', ') || 'None provided'}
-Question Keywords: ${keywords.questions.join(', ') || 'None provided'}
+## TARGET KEYWORDS TO INTEGRATE:
+Primary Keywords (MUST include 2-3 times): ${keywords.primary.slice(0, 5).join(', ') || 'None provided'}
+Secondary Keywords (include 1-2 times each): ${keywords.secondary.slice(0, 10).join(', ') || 'None provided'}
+NLP Terms (sprinkle naturally): ${keywords.nlpTerms.slice(0, 15).join(', ') || 'None provided'}
 
-Please provide optimized content in the following JSON format ONLY (no additional text):
+## YOUR TASK:
+1. Read through the original content carefully
+2. Identify natural places to insert keywords WITHOUT changing the meaning
+3. Return the content with minimal changes marked using [[KEYWORD: term]], [[ADJUSTED:]], or [[NEW]]
+4. Count your changes - aim for 10-20 keyword insertions across the entire content, not a complete rewrite
+
+## RESPOND WITH JSON:
 {
-  "metaTitle": "Optimized title (50-60 chars, primary keyword in first 30 chars${settings.brandName ? `, end with " | ${settings.brandName}"` : ''})",
-  "metaDescription": "Compelling description (150-160 chars, include primary keyword and CTA)",
-  "h1": "New H1 (different from title, includes primary keyword naturally)",
-  "fullContent": "Complete optimized page content with proper markdown formatting using ## for H2, ### for H3, bullet points, etc. The content should be well-structured, include natural keyword integration, and provide value to readers. Include 2-4 H2 sections with relevant H3 subsections.",
+  "metaTitle": "Optimized title (50-60 chars, add primary keyword to existing title style if possible${settings.brandName ? `, keep " | ${settings.brandName}" at end` : ''})",
+  "metaDescription": "Keep similar to original but add primary keyword and a CTA (150-160 chars)",
+  "h1": "Similar to original H1 but with primary keyword added naturally",
+  "fullContent": "The ORIGINAL content with MINIMAL keyword insertions marked. Keep 90%+ identical to original.",
+  "changesSummary": "Brief list of the specific changes you made",
   "faqs": [
-    {"question": "FAQ question 1?", "answer": "Detailed answer 1"},
-    {"question": "FAQ question 2?", "answer": "Detailed answer 2"},
-    {"question": "FAQ question 3?", "answer": "Detailed answer 3"}
+    {"question": "Relevant FAQ 1?", "answer": "Answer based on page content"},
+    {"question": "Relevant FAQ 2?", "answer": "Answer based on page content"},
+    {"question": "Relevant FAQ 3?", "answer": "Answer based on page content"}
   ]
 }
 
-Important requirements:
-1. Meta title MUST be between 50-60 characters
-2. Meta description MUST be between 150-160 characters
-3. H1 MUST be different from the meta title
-4. Include primary keyword early in title and naturally in H1
-5. Full content should be comprehensive and well-structured
-6. FAQs should be relevant to the topic and include keywords naturally
-7. Respond ONLY with the JSON object, no other text`;
+CRITICAL: The fullContent should be recognizably the SAME content as the original, just with keywords inserted. If you rewrite it, you have failed the task.`;
+
+  console.log('[content-optimizer] Sending preservation-focused prompt to Claude...');
 
   const response = await client.messages.create({
     model: 'claude-sonnet-4-20250514',
-    max_tokens: 4000,
+    max_tokens: 8000,
     messages: [
       {
         role: 'user',
-        content: userPrompt,
+        content: contentOptimizationPrompt,
       },
     ],
     system: systemPrompt,
@@ -100,7 +120,6 @@ Important requirements:
   // Parse JSON response
   let optimizedData;
   try {
-    // Try to extract JSON from the response (handle potential markdown code blocks)
     let jsonString = textContent.text.trim();
     if (jsonString.startsWith('```json')) {
       jsonString = jsonString.slice(7);
@@ -112,10 +131,16 @@ Important requirements:
       jsonString = jsonString.slice(0, -3);
     }
     optimizedData = JSON.parse(jsonString.trim());
+
+    console.log('[content-optimizer] Changes summary:', optimizedData.changesSummary);
   } catch {
     console.error('Failed to parse AI response:', textContent.text);
     throw new Error('Failed to parse AI optimization response');
   }
+
+  // Clean the change markers from fullContent for display
+  // But store them for the document generator to use for highlighting
+  const fullContentWithMarkers = optimizedData.fullContent || '';
 
   // Generate schema recommendations
   const schemaRecommendations = settings.includeSchemaRecommendations
@@ -126,7 +151,7 @@ Important requirements:
     metaTitle: optimizedData.metaTitle || '',
     metaDescription: optimizedData.metaDescription || '',
     h1: optimizedData.h1 || '',
-    fullContent: optimizedData.fullContent || '',
+    fullContent: fullContentWithMarkers,
     faqs: optimizedData.faqs || [],
     schemaRecommendations,
   };

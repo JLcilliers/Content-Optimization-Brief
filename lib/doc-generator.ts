@@ -18,6 +18,7 @@ import {
   VerticalAlign,
 } from 'docx';
 import type { AnalysisResult, Settings, FAQ, SchemaRecommendation } from '@/types';
+import { parseMarkedContent, splitIntoHighlightSegments } from './content-differ';
 
 // Font constant for easy updates
 const FONT = 'Poppins';
@@ -520,7 +521,7 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
                 bold: true,
               }),
               new TextRun({
-                text: 'Content highlighted in ',
+                text: 'Words highlighted in ',
                 font: FONT,
                 size: 22,
               }),
@@ -532,7 +533,7 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
                 shading: { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR },
               }),
               new TextRun({
-                text: ' indicates new or significantly changed content from the original page.',
+                text: ' are keyword insertions or small adjustments. The rest of the content remains unchanged from the original page.',
                 font: FONT,
                 size: 22,
               }),
@@ -927,30 +928,19 @@ function parseInlineFormattingWithHighlight(text: string, isNew: boolean = false
   return elements;
 }
 
-// Helper to check if content is new/changed compared to original
-function isContentNew(text: string, originalContent: string): boolean {
-  if (!originalContent) return true;
-
-  const originalLower = originalContent.toLowerCase();
-  const textLower = text.toLowerCase().trim();
-
-  // Check first 50 characters as a key phrase
-  const keyPhrase = textLower.slice(0, 50);
-
-  // If the key phrase exists in original, it's not new
-  if (originalLower.includes(keyPhrase)) return false;
-
-  // Check for first 5 words match
-  const firstWords = textLower.split(' ').slice(0, 5).join(' ');
-  if (originalLower.includes(firstWords)) return false;
-
-  return true;
-}
-
+/**
+ * Parse content with AI markers and create paragraphs with inline highlighting
+ * The AI marks changes with [[KEYWORD: term]], [[ADJUSTED: old → new]], [[NEW]]
+ */
 function parseContentToParagraphs(content: string, originalContent?: string): Paragraph[] {
   const paragraphs: Paragraph[] = [];
-  const lines = content.split('\n');
-  const original = originalContent || '';
+
+  // Parse the AI-marked content to get highlight segments
+  const { cleanContent, highlightSegments, changes } = parseMarkedContent(content);
+
+  console.log('[doc-generator] Parsed changes:', changes.length, 'highlight segments:', highlightSegments.length);
+
+  const lines = cleanContent.split('\n');
 
   for (const line of lines) {
     const trimmedLine = line.trim();
@@ -963,19 +953,13 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
     // H1 heading (#)
     if (trimmedLine.startsWith('# ') && !trimmedLine.startsWith('## ')) {
       const headingText = trimmedLine.replace('# ', '');
-      const isNew = isContentNew(headingText, original);
       paragraphs.push(
         new Paragraph({
-          children: [
-            new TextRun({
-              text: cleanMarkdownEscapes(headingText),
-              bold: true,
-              size: FONT_SIZES.HEADING1,
-              font: FONT,
-              color: COLORS.PRIMARY,
-              shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
-            }),
-          ],
+          children: createTextRunsWithHighlighting(headingText, highlightSegments, {
+            bold: true,
+            size: FONT_SIZES.HEADING1,
+            color: COLORS.PRIMARY,
+          }),
           heading: HeadingLevel.HEADING_1,
           spacing: { before: 400, after: 200 },
         })
@@ -986,19 +970,13 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
     // H2 heading (##)
     if (trimmedLine.startsWith('## ') && !trimmedLine.startsWith('### ')) {
       const headingText = trimmedLine.replace('## ', '');
-      const isNew = isContentNew(headingText, original);
       paragraphs.push(
         new Paragraph({
-          children: [
-            new TextRun({
-              text: cleanMarkdownEscapes(headingText),
-              bold: true,
-              size: FONT_SIZES.HEADING2,
-              font: FONT,
-              color: COLORS.SECONDARY,
-              shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
-            }),
-          ],
+          children: createTextRunsWithHighlighting(headingText, highlightSegments, {
+            bold: true,
+            size: FONT_SIZES.HEADING2,
+            color: COLORS.SECONDARY,
+          }),
           heading: HeadingLevel.HEADING_2,
           spacing: { before: 300, after: 150 },
         })
@@ -1009,19 +987,13 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
     // H3 heading (###)
     if (trimmedLine.startsWith('### ')) {
       const headingText = trimmedLine.replace('### ', '');
-      const isNew = isContentNew(headingText, original);
       paragraphs.push(
         new Paragraph({
-          children: [
-            new TextRun({
-              text: cleanMarkdownEscapes(headingText),
-              bold: true,
-              size: FONT_SIZES.HEADING3,
-              font: FONT,
-              color: COLORS.TERTIARY,
-              shading: isNew ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
-            }),
-          ],
+          children: createTextRunsWithHighlighting(headingText, highlightSegments, {
+            bold: true,
+            size: FONT_SIZES.HEADING3,
+            color: COLORS.TERTIARY,
+          }),
           heading: HeadingLevel.HEADING_3,
           spacing: { before: 200, after: 100 },
         })
@@ -1029,45 +1001,66 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       continue;
     }
 
-    // Bullet point - use Word's native numbering with inline formatting
+    // Bullet point
     if (trimmedLine.startsWith('- ') || trimmedLine.startsWith('* ')) {
       const bulletContent = trimmedLine.substring(2);
-      const isNew = isContentNew(bulletContent, original);
       paragraphs.push(
         new Paragraph({
           numbering: { reference: 'bullet-list', level: 0 },
-          children: parseInlineFormattingWithHighlight(bulletContent, isNew),
+          children: createTextRunsWithHighlighting(bulletContent, highlightSegments),
           spacing: { after: 80 },
         })
       );
       continue;
     }
 
-    // Numbered list - use Word's native numbering with inline formatting
+    // Numbered list
     const numberMatch = trimmedLine.match(/^(\d+)\.\s(.+)/);
     if (numberMatch) {
-      const isNew = isContentNew(numberMatch[2], original);
       paragraphs.push(
         new Paragraph({
           numbering: { reference: 'numbered-list', level: 0 },
-          children: parseInlineFormattingWithHighlight(numberMatch[2], isNew),
+          children: createTextRunsWithHighlighting(numberMatch[2], highlightSegments),
           spacing: { after: 80 },
         })
       );
       continue;
     }
 
-    // Regular paragraph with inline formatting
-    const isNew = isContentNew(trimmedLine, original);
+    // Regular paragraph
     paragraphs.push(
       new Paragraph({
-        children: parseInlineFormattingWithHighlight(trimmedLine, isNew),
+        children: createTextRunsWithHighlighting(trimmedLine, highlightSegments),
         spacing: { after: 150 },
       })
     );
   }
 
   return paragraphs;
+}
+
+/**
+ * Create TextRun array with inline highlighting for marked segments
+ */
+function createTextRunsWithHighlighting(
+  text: string,
+  highlightSegments: string[],
+  baseStyle: { bold?: boolean; size?: number; color?: string } = {}
+): TextRun[] {
+  // Clean markdown escapes first
+  const cleanedText = cleanMarkdownEscapes(text);
+
+  // Split text into segments based on what should be highlighted
+  const segments = splitIntoHighlightSegments(cleanedText, highlightSegments);
+
+  return segments.map(segment => new TextRun({
+    text: segment.text,
+    font: FONT,
+    size: baseStyle.size || FONT_SIZES.BODY,
+    bold: baseStyle.bold,
+    color: baseStyle.color,
+    shading: segment.highlight ? { fill: COLORS.GREEN_HIGHLIGHT, type: ShadingType.CLEAR } : undefined,
+  }));
 }
 
 function generateFAQParagraphs(faqs: FAQ[], highlightAsNew: boolean = false): Paragraph[] {
