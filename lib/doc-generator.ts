@@ -1200,6 +1200,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       /^\[PARA\]$/i,                // Empty PARA marker
       /^\[BULLET\]$/i,              // Empty BULLET marker
       /^\[H[123]\]$/i,              // Empty heading marker
+      /^\[\[NEW\]\]$/i,             // Standalone [[NEW]] marker
     ];
 
     if (junkPatterns.some(pattern => pattern.test(trimmedLine))) {
@@ -1207,9 +1208,19 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       continue;
     }
 
+    // Remove [[NEW]] marker from beginning of lines but keep the content
+    let cleanedLine = trimmedLine.replace(/^\[\[NEW\]\]\s*/g, '');
+    // Also remove [[NEW]] from anywhere in the line
+    cleanedLine = cleanedLine.replace(/\[\[NEW\]\]\s*/g, '');
+
+    // If line became empty after removing [[NEW]], skip it
+    if (!cleanedLine.trim()) {
+      continue;
+    }
+
     // NEW STRUCTURED FORMAT: [H1] Heading
-    if (trimmedLine.startsWith('[H1]')) {
-      const headingText = trimmedLine.replace('[H1]', '').trim();
+    if (cleanedLine.startsWith('[H1]')) {
+      const headingText = cleanedLine.replace('[H1]', '').trim();
       // Check for duplicate H1 using module-level tracking
       if (isDuplicateH1(headingText)) {
         continue; // Skip duplicate H1
@@ -1223,15 +1234,15 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.PRIMARY,
           }),
           heading: HeadingLevel.HEADING_1,
-          spacing: { before: 200, after: 100 },
+          spacing: { before: 240, after: 120 },
         })
       );
       continue;
     }
 
     // NEW STRUCTURED FORMAT: [H2] Subheading
-    if (trimmedLine.startsWith('[H2]')) {
-      const headingText = trimmedLine.replace('[H2]', '').trim();
+    if (cleanedLine.startsWith('[H2]')) {
+      const headingText = cleanedLine.replace('[H2]', '').trim();
       paragraphs.push(
         new Paragraph({
           children: createTextRunsWithHighlighting(headingText, [], {
@@ -1240,15 +1251,15 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.SECONDARY,
           }),
           heading: HeadingLevel.HEADING_2,
-          spacing: { before: 150, after: 60 },
+          spacing: { before: 240, after: 120 },
         })
       );
       continue;
     }
 
     // NEW STRUCTURED FORMAT: [H3] Sub-subheading
-    if (trimmedLine.startsWith('[H3]')) {
-      const headingText = trimmedLine.replace('[H3]', '').trim();
+    if (cleanedLine.startsWith('[H3]')) {
+      const headingText = cleanedLine.replace('[H3]', '').trim();
       paragraphs.push(
         new Paragraph({
           children: createTextRunsWithHighlighting(headingText, [], {
@@ -1257,40 +1268,40 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.TERTIARY,
           }),
           heading: HeadingLevel.HEADING_3,
-          spacing: { before: 120, after: 40 },
+          spacing: { before: 200, after: 80 },
         })
       );
       continue;
     }
 
     // NEW STRUCTURED FORMAT: [PARA] Paragraph text
-    if (trimmedLine.startsWith('[PARA]')) {
-      const paraText = trimmedLine.replace('[PARA]', '').trim();
+    if (cleanedLine.startsWith('[PARA]')) {
+      const paraText = cleanedLine.replace('[PARA]', '').trim();
       paragraphs.push(
         new Paragraph({
           children: createTextRunsWithHighlighting(paraText, []),
-          spacing: { after: 80 },
+          spacing: { before: 0, after: 200 },
         })
       );
       continue;
     }
 
     // NEW STRUCTURED FORMAT: [BULLET] Bullet point
-    if (trimmedLine.startsWith('[BULLET]')) {
-      const bulletContent = trimmedLine.replace('[BULLET]', '').trim();
+    if (cleanedLine.startsWith('[BULLET]')) {
+      const bulletContent = cleanedLine.replace('[BULLET]', '').trim();
       paragraphs.push(
         new Paragraph({
           numbering: { reference: 'bullet-list', level: 0 },
           children: createTextRunsWithHighlighting(bulletContent, []),
-          spacing: { after: 80 },
+          spacing: { before: 0, after: 0, line: 276 },
         })
       );
       continue;
     }
 
     // LEGACY FORMAT: # H1 heading (markdown)
-    if (trimmedLine.startsWith('# ') && !trimmedLine.startsWith('## ')) {
-      const headingText = trimmedLine.replace('# ', '');
+    if (cleanedLine.startsWith('# ') && !cleanedLine.startsWith('## ')) {
+      const headingText = cleanedLine.replace('# ', '');
       // Check for duplicate H1 using module-level tracking
       if (isDuplicateH1(headingText)) {
         continue; // Skip duplicate H1
@@ -1304,15 +1315,15 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.PRIMARY,
           }),
           heading: HeadingLevel.HEADING_1,
-          spacing: { before: 200, after: 100 },
+          spacing: { before: 240, after: 120 },
         })
       );
       continue;
     }
 
     // LEGACY FORMAT: ## H2 heading (markdown)
-    if (trimmedLine.startsWith('## ') && !trimmedLine.startsWith('### ')) {
-      const headingText = trimmedLine.replace('## ', '');
+    if (cleanedLine.startsWith('## ') && !cleanedLine.startsWith('### ')) {
+      const headingText = cleanedLine.replace('## ', '');
       paragraphs.push(
         new Paragraph({
           children: createTextRunsWithHighlighting(headingText, [], {
@@ -1321,15 +1332,15 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.SECONDARY,
           }),
           heading: HeadingLevel.HEADING_2,
-          spacing: { before: 150, after: 60 },
+          spacing: { before: 240, after: 120 },
         })
       );
       continue;
     }
 
     // LEGACY FORMAT: ### H3 heading (markdown)
-    if (trimmedLine.startsWith('### ')) {
-      const headingText = trimmedLine.replace('### ', '');
+    if (cleanedLine.startsWith('### ')) {
+      const headingText = cleanedLine.replace('### ', '');
       paragraphs.push(
         new Paragraph({
           children: createTextRunsWithHighlighting(headingText, [], {
@@ -1338,33 +1349,33 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
             color: COLORS.TERTIARY,
           }),
           heading: HeadingLevel.HEADING_3,
-          spacing: { before: 120, after: 40 },
+          spacing: { before: 200, after: 80 },
         })
       );
       continue;
     }
 
     // LEGACY FORMAT: Bullet point (- or *)
-    if (trimmedLine.startsWith('- ') || trimmedLine.startsWith('* ')) {
-      const bulletContent = trimmedLine.substring(2);
+    if (cleanedLine.startsWith('- ') || cleanedLine.startsWith('* ')) {
+      const bulletContent = cleanedLine.substring(2);
       paragraphs.push(
         new Paragraph({
           numbering: { reference: 'bullet-list', level: 0 },
           children: createTextRunsWithHighlighting(bulletContent, []),
-          spacing: { after: 80 },
+          spacing: { before: 0, after: 0, line: 276 },
         })
       );
       continue;
     }
 
     // LEGACY FORMAT: Numbered list
-    const numberMatch = trimmedLine.match(/^(\d+)\.\s(.+)/);
+    const numberMatch = cleanedLine.match(/^(\d+)\.\s(.+)/);
     if (numberMatch) {
       paragraphs.push(
         new Paragraph({
           numbering: { reference: 'numbered-list', level: 0 },
           children: createTextRunsWithHighlighting(numberMatch[2], []),
-          spacing: { after: 80 },
+          spacing: { before: 0, after: 0, line: 276 },
         })
       );
       continue;
@@ -1374,8 +1385,8 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
     // This handles content that doesn't have any markers
     paragraphs.push(
       new Paragraph({
-        children: createTextRunsWithHighlighting(trimmedLine, []),
-        spacing: { after: 200 },
+        children: createTextRunsWithHighlighting(cleanedLine, []),
+        spacing: { before: 0, after: 200 },
       })
     );
   }
