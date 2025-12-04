@@ -272,13 +272,10 @@ export function filterAndLimitKeywords(
 
 /**
  * Format keywords for display in document
- * Returns a formatted string with keyword and volume
+ * Returns a comma-separated string of keywords
  */
 export function formatKeywordsForDocument(keywords: KeywordWithVolume[]): string {
   return keywords
-    .map(kw => {
-      const volumeStr = kw.volume !== null ? ` (${kw.volume.toLocaleString()} monthly searches)` : '';
-      return `${kw.keyword}${volumeStr}`;
-    })
-    .join('\n');
+    .map(kw => kw.keyword)
+    .join(', ');
 }
