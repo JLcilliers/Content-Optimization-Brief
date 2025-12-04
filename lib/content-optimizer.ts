@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { CrawledData, KeywordData, Settings, OptimizedContent, FAQ, SchemaRecommendation } from '@/types';
+import { filterAndLimitKeywords } from './keyword-processor';
 
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 
@@ -16,116 +17,151 @@ export async function optimizeContent(
 
   // The key change: Prompt focuses on PRESERVING original content with MINIMAL changes
   // Output uses structured markers for clean document generation
-  const systemPrompt = `You are an SEO content optimizer. Your job is to make MINIMAL, SURGICAL changes to existing content to improve SEO rankings.
+  const systemPrompt = `You are an SEO content optimizer. Your job is to make MINIMAL, GRAMMATICALLY CORRECT changes to existing content.
 
-## CRITICAL RULES - READ CAREFULLY:
+## CRITICAL RULES - READ CAREFULLY
 
-1. **PRESERVE 90%+ of the original content EXACTLY as written**
-2. **DO NOT rewrite paragraphs** - only insert keywords into existing sentences
-3. **DO NOT change the content structure** - keep the same sections and flow
-4. **DO NOT change the brand voice** or writing style
-5. **Make surgical, targeted changes** - not wholesale rewrites
-6. **OUTPUT PLAIN TEXT ONLY** - no markdown, no HTML, no special formatting
+### Rule 1: PRESERVE ORIGINAL CONTENT
+- Keep 85-95% of the original content EXACTLY as written
+- Do NOT rewrite paragraphs
+- Do NOT change the content structure
+- Do NOT add new sections unless absolutely necessary
 
-## WHAT YOU CAN CHANGE:
-✅ Insert a target keyword naturally into an existing sentence
-✅ Slightly adjust a phrase to include a keyword (keep meaning identical)
-✅ Add a keyword to an existing heading
-✅ Add 1-2 NEW sentences ONLY if content is very thin on a topic (mark with [[NEW]])
-✅ Suggest adding an FAQ section at the end (mark entire section with [[NEW FAQ SECTION]])
+### Rule 2: GRAMMAR IS MANDATORY
+- NEVER append keywords to sentence ends without proper grammar
+- NEVER create run-on sentences
+- NEVER create grammatically incorrect text
+- Every optimized sentence must read naturally aloud
 
-## WHAT YOU CANNOT CHANGE:
+### Rule 3: ONE KEYWORD PER SENTENCE
+- Do NOT stack multiple keywords in one sentence
+- Distribute keywords throughout the content naturally
+- Maximum 10-15 keyword insertions total
+
+### Rule 4: VARIATIONS OVER REPETITION
+- Use synonyms and variations of keywords
+- Don't repeat the exact same keyword phrase more than 2-3 times
+
+## GRAMMAR EXAMPLES
+
+CORRECT keyword integration:
+"While many school districts offer teachers a form of educator's insurance, they don't provide [[KEYWORD: liability insurance coverage]] if the district takes action against you."
+
+WRONG - keyword appended without grammar:
+"While many school districts offer teachers a form of educator's insurance, they don't provide coverage if the district takes action against you teacher liability insurance coverage."
+
+WRONG - multiple keywords stacked:
+"Our [[KEYWORD: teacher liability insurance]] provides [[KEYWORD: professional liability coverage]] with [[KEYWORD: educator protection]]."
+
+## WHAT YOU CAN CHANGE
+✅ Insert a keyword into an existing sentence (grammatically correct)
+✅ Add a brief clarifying phrase containing a keyword
+✅ Slightly rephrase to include a keyword (preserve meaning)
+✅ Add 1-2 new sentences if content is very thin (mark with [[NEW]])
+✅ Add FAQ section at end only (mark with [[NEW FAQ SECTION]])
+
+## WHAT YOU CANNOT CHANGE
 ❌ Rewrite entire paragraphs
-❌ Change the meaning or intent of any sentence
-❌ Add new sections in the middle of existing content
-❌ Remove or significantly alter existing content
-❌ Change the brand's voice, tone, or style
-❌ Restructure the page layout
+❌ Change content meaning or intent
+❌ Append keywords to sentence ends without grammar
+❌ Stack multiple keywords in one sentence
+❌ Add keywords from unrelated page topics
+❌ Create duplicate sections (like FAQ appearing twice)
+❌ Use markdown or HTML
 
-## OUTPUT FORMAT - VERY IMPORTANT:
+## OUTPUT FORMAT
 
-For the fullContent field, use ONLY these structured markers (NO markdown, NO HTML):
+Use ONLY these structured markers:
 
-**Headings:**
-- [H1] Heading text here
-- [H2] Subheading text here
-- [H3] Sub-subheading text here
+Headings:
+- [H1] Heading text (only ONE H1 allowed)
+- [H2] Subheading text
+- [H3] Sub-subheading text
 
-**Paragraphs:**
-- [PARA] Your paragraph text here. Each paragraph should be on its own line with [PARA] prefix.
+Content:
+- [PARA] Paragraph text
+- [BULLET] Bullet point text
 
-**Bullet points:**
-- [BULLET] First bullet point
-- [BULLET] Second bullet point
+Change markers (embed within text):
+- [[KEYWORD: term]] - inserted keyword (will be highlighted green)
+- [[ADJUSTED: original → new]] - rephrased content
+- [[NEW]] - entirely new content
 
-**Change markers (embed within text):**
-- [[KEYWORD: term]] - where you inserted a keyword
-- [[ADJUSTED: original → new]] - for phrase adjustments
-- [[NEW]] - for new sentences
-
-Example of correct structured output:
+Example output:
 [H1] Comprehensive [[KEYWORD: Professional Liability Insurance]] for Educators
-[PARA] We have been protecting educators with [[KEYWORD: professional liability insurance]] for over 30 years. Our dedicated team understands the unique challenges you face. [[NEW]] Every policy includes comprehensive coverage for classroom incidents.
-[H2] Why Choose Our [[KEYWORD: Teacher Insurance]] Coverage
+[PARA] We have been protecting educators with [[KEYWORD: professional liability insurance]] for over 30 years. Our dedicated team understands the unique challenges you face.
+[H2] Why Choose Our Coverage
 [PARA] Our team helps [[ADJUSTED: teachers → educators and teachers]] with [[KEYWORD: liability coverage]] every day.
 [BULLET] Coverage for legal defense costs
 [BULLET] Protection against student claims
-[BULLET] 24/7 support hotline
-
-DO NOT use:
-- Markdown (**bold**, *italic*, [links](url), # headings)
-- HTML tags (<p>, <h1>, <strong>, etc.)
-- Escaped characters (\\*, \\[, etc.)
 
 Content Tone: ${settings.tone}
 Brand Name: ${settings.brandName || 'The business'}`;
 
-  // First, send the original content to get the preserved + optimized version
-  const contentOptimizationPrompt = `Optimize this webpage content with MINIMAL changes. Preserve the original text and only insert keywords where they fit naturally.
+  // Filter keywords to only those relevant to this page BEFORE sending to AI
+  const filteredKeywords = filterAndLimitKeywords(
+    keywords,
+    crawledData.url,
+    crawledData.title
+  );
 
-## ORIGINAL PAGE CONTENT:
+  // Get primary keyword (first one) and secondary keywords (rest)
+  const primaryKeyword = filteredKeywords[0]?.keyword || keywords.primary[0] || '';
+  const secondaryKeywords = filteredKeywords.slice(1).map(k => k.keyword);
+
+  console.log('[content-optimizer] Filtered keywords for AI:', filteredKeywords.map(k => k.keyword));
+
+  // First, send the original content to get the preserved + optimized version
+  const contentOptimizationPrompt = `Optimize this webpage content with MINIMAL, GRAMMATICALLY CORRECT changes.
+
+## PAGE CONTEXT
+URL: ${crawledData.url}
+Page Topic: ${crawledData.title}
+
+## ORIGINAL PAGE CONTENT
 """
 ${crawledData.bodyContent.substring(0, 8000)}
 """
 
-## CURRENT META ELEMENTS:
+## CURRENT META ELEMENTS
 - Title: ${crawledData.title}
 - Description: ${crawledData.metaDescription}
 - H1: ${crawledData.h1.join(', ') || 'None'}
 
-## TARGET KEYWORDS TO INTEGRATE:
-Primary Keywords (MUST include 2-3 times): ${keywords.primary.slice(0, 5).join(', ') || 'None provided'}
-Secondary Keywords (include 1-2 times each): ${keywords.secondary.slice(0, 10).join(', ') || 'None provided'}
-NLP Terms (sprinkle naturally): ${keywords.nlpTerms.slice(0, 15).join(', ') || 'None provided'}
+## TARGET KEYWORDS (Pre-filtered for this page)
+PRIMARY KEYWORD (integrate 2-3 times): ${primaryKeyword || 'None provided'}
+SECONDARY KEYWORDS (integrate 1-2 times each): ${secondaryKeywords.join(', ') || 'None provided'}
 
-## YOUR TASK:
+Note: These keywords have been pre-filtered to match this specific page. Do NOT use other keywords.
+
+## YOUR TASK
 1. Read through the original content carefully
-2. Identify natural places to insert keywords WITHOUT changing the meaning
-3. Return the content with minimal changes marked using [[KEYWORD: term]], [[ADJUSTED:]], or [[NEW]]
-4. Count your changes - aim for 10-20 keyword insertions across the entire content, not a complete rewrite
+2. Insert keywords into existing sentences WITH PROPER GRAMMAR
+3. Do NOT append keywords to sentence ends
+4. Do NOT stack multiple keywords in one sentence
+5. Aim for 10-15 total keyword insertions maximum
+6. Mark changes with [[KEYWORD: term]], [[ADJUSTED:]], or [[NEW]]
 
-## RESPOND WITH JSON:
+## RESPOND WITH JSON
 {
-  "metaTitle": "Optimized title (50-60 chars, add primary keyword to existing title style if possible${settings.brandName ? `, keep " | ${settings.brandName}" at end` : ''})",
-  "metaDescription": "Keep similar to original but add primary keyword and a CTA (150-160 chars)",
-  "h1": "Similar to original H1 but with primary keyword added naturally",
-  "fullContent": "Structured content using [H1], [H2], [H3], [PARA], [BULLET] markers. Keep 90%+ identical to original. NO MARKDOWN OR HTML.",
-  "changesSummary": "Brief list of the specific changes you made",
+  "metaTitle": "50-60 chars, primary keyword in first 30 chars${settings.brandName ? `, end with ' | ${settings.brandName}'` : ''}",
+  "metaDescription": "150-160 chars, include primary keyword and a call-to-action",
+  "h1": "Similar to original H1 with primary keyword added naturally (must differ from title)",
+  "fullContent": "Structured content using [H1], [H2], [H3], [PARA], [BULLET]. Only ONE [H1]. Keep 85-95% identical to original.",
+  "changesSummary": "List of specific changes made",
   "faqs": [
-    {"question": "Relevant FAQ 1?", "answer": "Answer based on page content"},
-    {"question": "Relevant FAQ 2?", "answer": "Answer based on page content"},
-    {"question": "Relevant FAQ 3?", "answer": "Answer based on page content"}
+    {"question": "Relevant FAQ?", "answer": "Answer based on page content"}
   ]
 }
 
-CRITICAL REQUIREMENTS:
-1. The fullContent should be recognizably the SAME content as the original, just with keywords inserted
-2. Use ONLY the structured markers: [H1], [H2], [H3], [PARA], [BULLET]
-3. NO markdown (no **, *, #, [], links, etc.)
-4. NO HTML tags
-5. Each paragraph MUST start with [PARA]
-6. Each heading MUST start with [H1], [H2], or [H3]
-7. Each bullet point MUST start with [BULLET]`;
+## VALIDATION CHECKLIST (verify before responding)
+- [ ] Only ONE [H1] in fullContent
+- [ ] No duplicate FAQ sections
+- [ ] All keyword insertions are grammatically correct
+- [ ] No keywords appended to sentence ends
+- [ ] No multiple keywords in same sentence
+- [ ] No markdown or HTML
+- [ ] Title tag differs from H1`;
 
   console.log('[content-optimizer] Sending preservation-focused prompt to Claude...');
 
