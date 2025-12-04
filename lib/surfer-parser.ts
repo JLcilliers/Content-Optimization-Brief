@@ -594,22 +594,72 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
         }
       }
 
-      // STRATEGY 0: Extract from SurferSEO's ARIA-based table (shared audit pages)
-      // SurferSEO uses role="row" and role="cell" for accessibility
-      const ariaRows = document.querySelectorAll('[role="row"]');
+      // STRATEGY 0: Extract from SurferSEO's "Terms to Use" section specifically
+      // First, find the Terms section container, then extract ONLY from that section
+      // This prevents extracting competitor URLs from the wrong table
+
+      // Find the "Terms to Use" or "Important terms" section
+      const findTermsSection = (): Element | null => {
+        // Look for section headers containing "Terms" or "Important"
+        const headings = document.querySelectorAll('h1, h2, h3, h4, h5, h6, [class*="heading"], [class*="title"], button');
+        for (const heading of headings) {
+          const text = (heading.textContent || '').toLowerCase();
+          if (text.includes('terms to use') || text.includes('important terms') ||
+              (text.includes('terms') && !text.includes('competitor'))) {
+            // Found the Terms section header - look for the containing section
+            // Walk up to find a container that has the table/data
+            let parent = heading.parentElement;
+            for (let i = 0; i < 10 && parent; i++) {
+              // Check if this parent contains ARIA table rows or regular table rows
+              const hasDataRows = parent.querySelectorAll('[role="row"], tr').length > 0;
+              if (hasDataRows) {
+                return parent;
+              }
+              parent = parent.parentElement;
+            }
+            // If no table found in parent, return the heading's closest section
+            return heading.closest('section, [class*="section"], [class*="card"], article, div[class*="container"]');
+          }
+        }
+
+        // Fallback: Look for elements that contain term-like text patterns
+        // (terms with "Add X" action text nearby)
+        const allSections = document.querySelectorAll('section, [class*="section"], [class*="panel"], [class*="card"]');
+        for (const section of allSections) {
+          const text = section.textContent || '';
+          // Check if section has term-like content (action suggestions)
+          if (text.includes('Add 1') || text.includes('Add 2') ||
+              (text.match(/\bAdd\s+\d+/g)?.length || 0) > 3) {
+            // Found a section with many "Add X" patterns - likely the terms section
+            return section;
+          }
+        }
+
+        return null;
+      };
+
+      const termsSection = findTermsSection();
+
+      // If we found a terms section, extract ONLY from there
+      // Otherwise, fall back to page-wide search (but with better filtering)
+      const targetContainer = termsSection || document.body;
+      const ariaRows = targetContainer.querySelectorAll('[role="row"]');
+
+      console.log('Terms section found:', !!termsSection, 'ARIA rows in section:', ariaRows.length);
+
       if (ariaRows.length > 1) {
-        data.extractionMethod = 'aria-table';
+        data.extractionMethod = termsSection ? 'aria-table-section' : 'aria-table';
         ariaRows.forEach((row, index) => {
           if (index === 0) return; // Skip header row (columnheader)
 
           // Check if this row has columnheaders (it's a header row)
           if (row.querySelector('[role="columnheader"]')) return;
 
-          const cells = row.querySelectorAll('[role="cell"]');
-          if (cells.length >= 4) {
+          const cells = row.querySelectorAll('[role="cell"], [role="gridcell"]');
+          if (cells.length >= 2) {
             // SurferSEO table structure (from CSV export):
             // Cell 0: Term (may include "NLP" badge)
-            // Cell 1: Examples count
+            // Cell 1: Examples count OR Competitors range
             // Cell 2: Your count ("You")
             // Cell 3: Suggested count
             // Cell 4: Sentiment (optional)
@@ -620,6 +670,13 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
             const termCell = cells[0];
             const termCellText = termCell?.textContent?.trim() || '';
 
+            // CRITICAL: Skip rows that look like competitor URLs
+            if (termCellText.startsWith('http') || termCellText.includes('://') ||
+                termCellText.includes('.com/') || termCellText.includes('.org/') ||
+                termCellText.includes('.net/') || termCellText.includes('.io/')) {
+              return;
+            }
+
             // Check if term has NLP badge
             const isNLP = termCellText.toLowerCase().includes('nlp') ||
                           !!termCell?.querySelector('[class*="nlp" i], [class*="badge" i]');
@@ -627,17 +684,44 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
             // Remove "NLP" badge text from term
             let termText = termCellText.replace(/\s*NLP\s*$/i, '').trim();
 
-            // Get "You" count (cell index 2)
-            const yourCountText = cells[2]?.textContent?.trim() || '0';
+            // Get count values from cells - adapt based on cell count
+            let yourCountText = '0';
+            let suggestedText = '1';
+            let relevanceText = '';
+            let actionText = '';
+
+            if (cells.length >= 4) {
+              // Standard layout: Term | Examples | You | Suggested | ... | Action
+              yourCountText = cells[2]?.textContent?.trim() || '0';
+              suggestedText = cells[3]?.textContent?.trim() || '1';
+
+              // Look for relevance (percentage) and action in remaining cells
+              for (let i = 4; i < cells.length; i++) {
+                const cellText = cells[i]?.textContent?.trim() || '';
+                if (cellText.includes('%')) {
+                  relevanceText = cellText;
+                } else if (cellText.toLowerCase().startsWith('add') ||
+                           cellText.toLowerCase().includes('remove') ||
+                           cellText.toLowerCase().includes('reduce')) {
+                  actionText = cellText;
+                }
+              }
+            } else if (cells.length >= 2) {
+              // Compact layout: Term | Count/Range
+              const countCell = cells[1]?.textContent?.trim() || '';
+              const countMatch = countCell.match(/(\d+)\s*\/\s*(\d+)/);
+              if (countMatch) {
+                yourCountText = countMatch[1];
+                suggestedText = countMatch[2];
+              }
+            }
+
+            // Get "You" count
             const yourCount = parseInt(yourCountText) || 0;
 
-            // Get "Suggested" count (cell index 3)
-            const suggestedText = cells[3]?.textContent?.trim() || '1';
-
-            // Get Relevance (cell index 5 if exists)
+            // Get Relevance
             let relevance: number | null = null;
-            if (cells.length >= 6) {
-              const relevanceText = cells[5]?.textContent?.trim() || '';
+            if (relevanceText) {
               const relevanceMatch = relevanceText.match(/([\d.]+)%?/);
               if (relevanceMatch) {
                 const relValue = parseFloat(relevanceMatch[1]);
@@ -647,18 +731,8 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
               }
             }
 
-            // Get Action (last cell typically)
-            let action: string | null = null;
-            if (cells.length >= 8) {
-              action = cells[7]?.textContent?.trim() || null;
-            } else if (cells.length >= 1) {
-              // Try last cell
-              const lastCell = cells[cells.length - 1];
-              const lastCellText = lastCell?.textContent?.trim() || '';
-              if (lastCellText.toLowerCase().startsWith('add')) {
-                action = lastCellText;
-              }
-            }
+            // Get Action
+            const action = actionText || null;
 
             if (termText && termText.length > 1 && termText.length < 100 && !termText.match(/^\d+$/)) {
               let recommendedMin: number | null = null;
@@ -708,10 +782,14 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
       }
 
       // STRATEGY 1: Extract from table rows (fallback for traditional HTML tables)
+      // Also try to target the Terms section if found
       if (data.terms.length === 0) {
-        const tableRows = document.querySelectorAll('tr');
+        // Re-use the terms section if found, otherwise search whole document
+        const tableContainer = termsSection || document.body;
+        const tableRows = tableContainer.querySelectorAll('tr');
+
         if (tableRows.length > 1) {
-          data.extractionMethod = 'table-rows';
+          data.extractionMethod = termsSection ? 'table-rows-section' : 'table-rows';
           tableRows.forEach((row, index) => {
             if (index === 0) return; // Skip header row
 
@@ -719,6 +797,14 @@ export async function parseSurferAuditReport(reportUrl: string): Promise<SurferR
             if (cells.length >= 2) {
               const termCell = cells[0];
               const termCellText = termCell?.textContent?.trim() || '';
+
+              // CRITICAL: Skip rows that look like competitor URLs
+              if (termCellText.startsWith('http') || termCellText.includes('://') ||
+                  termCellText.includes('.com/') || termCellText.includes('.org/') ||
+                  termCellText.includes('.net/') || termCellText.includes('.io/')) {
+                return;
+              }
+
               const isNLP = termCellText.toLowerCase().includes('nlp');
               const termText = termCellText.replace(/\s*NLP\s*$/i, '').trim();
 
