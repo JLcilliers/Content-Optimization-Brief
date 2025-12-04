@@ -19,6 +19,7 @@ import {
 } from 'docx';
 import type { AnalysisResult, Settings, FAQ, SchemaRecommendation } from '@/types';
 import { parseMarkedContent, splitIntoHighlightSegments } from './content-differ';
+import { filterAndLimitKeywords, formatKeywordsForDocument, type KeywordWithVolume } from './keyword-processor';
 
 // Font constant for easy updates
 const FONT = 'Poppins';
@@ -1345,15 +1346,15 @@ function createMetadataTable(
   const leftColWidth = { size: 2800, type: WidthType.DXA };
   const rightColWidth = { size: 6560, type: WidthType.DXA };
 
-  // Format keywords for the table
-  const keywordText = [
-    ...keywords.primary,
-    ...keywords.secondary,
-  ].join('\n');
+  // Filter and limit keywords to 5 most relevant for this page
+  const filteredKeywords = filterAndLimitKeywords(
+    keywords,
+    crawledData.url,
+    crawledData.title
+  );
 
-  const nlpText = keywords.nlpTerms.length > 0
-    ? '\n\nNLP:\n' + keywords.nlpTerms.slice(0, 10).join('\n')
-    : '';
+  // Format filtered keywords with volume for display
+  const keywordText = formatKeywordsForDocument(filteredKeywords);
 
   const rows: TableRow[] = [
     // Target Keywords
@@ -1375,7 +1376,7 @@ function createMetadataTable(
           children: [
             new Paragraph({
               children: [
-                new TextRun({ text: keywordText + nlpText, size: 22, font: FONT }),
+                new TextRun({ text: keywordText, size: 22, font: FONT }),
               ],
             }),
           ],

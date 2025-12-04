@@ -1,5 +1,8 @@
 // Core data types for SEO Content Optimizer
 
+// Re-export KeywordWithVolume from keyword-processor for convenience
+export type { KeywordWithVolume } from '@/lib/keyword-processor';
+
 export interface CrawledData {
   url: string;
   title: string;
