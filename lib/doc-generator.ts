@@ -671,15 +671,20 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
           }),
 
           // H1 as main heading - parse [[KEYWORD:]] markers inline for green highlighting
-          new Paragraph({
-            children: parseKeywordMarkersToTextRuns(optimizedContent.h1, {
-              bold: true,
-              size: FONT_SIZES.HEADING1,
-              color: COLORS.PRIMARY,
-            }),
-            heading: HeadingLevel.HEADING_1,
-            spacing: { before: 100, after: 200 },
-          }),
+          // IMPORTANT: Register this H1 to prevent duplicates in fullContent
+          ...(() => {
+            // Track this H1 so it won't be duplicated if it appears in fullContent
+            isDuplicateH1(optimizedContent.h1);
+            return [new Paragraph({
+              children: parseKeywordMarkersToTextRuns(optimizedContent.h1, {
+                bold: true,
+                size: FONT_SIZES.HEADING1,
+                color: COLORS.PRIMARY,
+              }),
+              heading: HeadingLevel.HEADING_1,
+              spacing: { before: 100, after: 200 },
+            })];
+          })(),
 
           // Full Content (with green highlighting for new content)
           ...parseContentToParagraphs(optimizedContent.fullContent, crawledData.bodyContent),
@@ -1300,16 +1305,51 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
 }
 
 /**
+ * Pre-process content to ensure proper spacing around [[KEYWORD:]] markers
+ * This fixes cases where AI outputs markers without spaces:
+ * - "years,[[KEYWORD: AIM Insurance]]has" → "years, [[KEYWORD: AIM Insurance]] has"
+ */
+function ensureSpacesAroundMarkers(content: string): string {
+  let result = content;
+
+  // Add space BEFORE [[ if preceded by letter/number (not space, not opening bracket/paren)
+  result = result.replace(/([a-zA-Z0-9])(\[\[)/g, '$1 $2');
+
+  // Add space AFTER ]] if followed by letter/number (not space, not punctuation)
+  result = result.replace(/(\]\])([a-zA-Z0-9])/g, '$1 $2');
+
+  // Handle comma cases: ",[[" should become ", [["
+  result = result.replace(/,(\[\[)/g, ', $1');
+
+  // Handle period cases: ".[[" should become ". [["
+  result = result.replace(/\.(\[\[)/g, '. $1');
+
+  // Handle colon cases: ":[[" should become ": [["
+  result = result.replace(/:(\[\[)/g, ': $1');
+
+  // Handle semicolon cases: ";[[" should become "; [["
+  result = result.replace(/;(\[\[)/g, '; $1');
+
+  // Clean up any double spaces that might result
+  result = result.replace(/  +/g, ' ');
+
+  return result;
+}
+
+/**
  * Parse [[KEYWORD: text]], [[ADJUSTED: old → new]], [[NEW]] markers inline
  * and convert them to TextRuns with green highlighting
  *
- * IMPORTANT: Handles spacing around keywords to prevent words running together
+ * IMPORTANT: Pre-processes content to ensure proper spacing around markers
  */
 function parseKeywordMarkersToTextRuns(
   content: string,
   baseStyle: { bold?: boolean; size?: number; color?: string } = {}
 ): TextRun[] {
   const runs: TextRun[] = [];
+
+  // CRITICAL: Pre-process to ensure spaces around markers BEFORE parsing
+  const processedContent = ensureSpacesAroundMarkers(content);
 
   // Regex to match all marker types:
   // [[KEYWORD: text]] - keyword insertion
@@ -1320,17 +1360,10 @@ function parseKeywordMarkersToTextRuns(
   let lastIndex = 0;
   let match;
 
-  while ((match = markerRegex.exec(content)) !== null) {
+  while ((match = markerRegex.exec(processedContent)) !== null) {
     // Add text before the marker (not highlighted)
     if (match.index > lastIndex) {
-      let beforeText = content.substring(lastIndex, match.index);
-
-      // Check if we need to add a space before the keyword
-      // If beforeText ends with an alphanumeric character (no space), add one
-      if (beforeText && /[a-zA-Z0-9,]$/.test(beforeText)) {
-        beforeText += ' ';
-      }
-
+      const beforeText = processedContent.substring(lastIndex, match.index);
       if (beforeText) {
         runs.push(new TextRun({
           text: cleanMarkdownEscapes(beforeText),
@@ -1374,27 +1407,11 @@ function parseKeywordMarkersToTextRuns(
     }
 
     lastIndex = match.index + match[0].length;
-
-    // Check if we need a space AFTER the keyword
-    // Look ahead to see if next character is alphanumeric (needs space)
-    if (lastIndex < content.length) {
-      const nextChar = content[lastIndex];
-      if (nextChar && /[a-zA-Z0-9]/.test(nextChar)) {
-        // Add a space run before the next content
-        runs.push(new TextRun({
-          text: ' ',
-          font: FONT,
-          size: baseStyle.size || FONT_SIZES.BODY,
-          bold: baseStyle.bold,
-          color: baseStyle.color,
-        }));
-      }
-    }
   }
 
   // Add any remaining text after the last marker
-  if (lastIndex < content.length) {
-    const afterText = content.substring(lastIndex);
+  if (lastIndex < processedContent.length) {
+    const afterText = processedContent.substring(lastIndex);
     if (afterText) {
       runs.push(new TextRun({
         text: cleanMarkdownEscapes(afterText),
@@ -1409,7 +1426,7 @@ function parseKeywordMarkersToTextRuns(
   // If no markers found and no runs created, return the whole content as a single run
   if (runs.length === 0) {
     runs.push(new TextRun({
-      text: cleanMarkdownEscapes(content),
+      text: cleanMarkdownEscapes(processedContent),
       font: FONT,
       size: baseStyle.size || FONT_SIZES.BODY,
       bold: baseStyle.bold,
