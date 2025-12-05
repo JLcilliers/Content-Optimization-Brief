@@ -143,10 +143,18 @@ export interface APIResponse<T> {
   error?: string;
 }
 
+export interface CustomInstructions {
+  thingsToAvoid: string;
+  focusAreas: string;
+  toneAndStyle: string;
+  additionalInstructions: string;
+}
+
 export interface AnalyzeRequest {
   url: string;
   keywords: KeywordData;
   settings: Settings;
+  customInstructions?: CustomInstructions;
 }
 
 // SurferSEO Report Types

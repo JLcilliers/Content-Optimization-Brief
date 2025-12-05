@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { CrawledData, KeywordData, Settings, OptimizedContent, FAQ, SchemaRecommendation } from '@/types';
+import type { CrawledData, KeywordData, Settings, OptimizedContent, FAQ, SchemaRecommendation, CustomInstructions } from '@/types';
 import { filterAndLimitKeywords } from './keyword-processor';
 
 const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
@@ -7,7 +7,8 @@ const anthropicApiKey = process.env.ANTHROPIC_API_KEY;
 export async function optimizeContent(
   crawledData: CrawledData,
   keywords: KeywordData,
-  settings: Settings
+  settings: Settings,
+  customInstructions?: CustomInstructions
 ): Promise<OptimizedContent> {
   if (!anthropicApiKey) {
     throw new Error('ANTHROPIC_API_KEY is not configured');
@@ -98,6 +99,32 @@ Example output:
 Content Tone: ${settings.tone}
 Brand Name: ${settings.brandName || 'The business'}`;
 
+  // Build custom instructions section if any are provided
+  let customInstructionsSection = '';
+  if (customInstructions) {
+    const sections: string[] = [];
+
+    if (customInstructions.thingsToAvoid?.trim()) {
+      sections.push(`### Things to Avoid (DO NOT include these):\n${customInstructions.thingsToAvoid.trim()}`);
+    }
+
+    if (customInstructions.focusAreas?.trim()) {
+      sections.push(`### Focus Areas (Emphasize these):\n${customInstructions.focusAreas.trim()}`);
+    }
+
+    if (customInstructions.toneAndStyle?.trim()) {
+      sections.push(`### Tone & Style Guidelines:\n${customInstructions.toneAndStyle.trim()}`);
+    }
+
+    if (customInstructions.additionalInstructions?.trim()) {
+      sections.push(`### Additional Instructions:\n${customInstructions.additionalInstructions.trim()}`);
+    }
+
+    if (sections.length > 0) {
+      customInstructionsSection = `\n\n## CUSTOM INSTRUCTIONS FROM USER\nFollow these specific guidelines provided by the user:\n\n${sections.join('\n\n')}`;
+    }
+  }
+
   // Filter keywords to only those relevant to this page BEFORE sending to AI
   const filteredKeywords = filterAndLimitKeywords(
     keywords,
@@ -133,6 +160,7 @@ PRIMARY KEYWORD (integrate 2-3 times): ${primaryKeyword || 'None provided'}
 SECONDARY KEYWORDS (integrate 1-2 times each): ${secondaryKeywords.join(', ') || 'None provided'}
 
 Note: These keywords have been pre-filtered to match this specific page. Do NOT use other keywords.
+${customInstructionsSection}
 
 ## YOUR TASK
 1. Read through the original content carefully

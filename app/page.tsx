@@ -5,10 +5,11 @@ import { Header } from "@/components/header"
 import { UrlInput } from "@/components/url-input"
 import { KeywordUpload } from "@/components/keyword-upload"
 import { SurferInput } from "@/components/surfer-input"
+import { CustomInstructionsInput } from "@/components/custom-instructions"
 import { AnalysisProgress } from "@/components/analysis-progress"
 import { ResultsPreview } from "@/components/results-preview"
 import { SettingsPanel } from "@/components/settings-panel"
-import type { AnalysisResult, KeywordData, Settings, SurferSEOReport } from "@/types"
+import type { AnalysisResult, KeywordData, Settings, SurferSEOReport, CustomInstructions } from "@/types"
 import { extractDomain } from "@/lib/utils"
 
 interface ProgressStep {
@@ -34,12 +35,20 @@ const defaultSettings: Settings = {
   includeSchemaRecommendations: true,
 }
 
+const defaultCustomInstructions: CustomInstructions = {
+  thingsToAvoid: '',
+  focusAreas: '',
+  toneAndStyle: '',
+  additionalInstructions: '',
+}
+
 export default function Home() {
   const [isAnalyzing, setIsAnalyzing] = useState(false)
   const [isGeneratingDoc, setIsGeneratingDoc] = useState(false)
   const [keywords, setKeywords] = useState<KeywordData | null>(null)
   const [surferReport, setSurferReport] = useState<SurferSEOReport | null>(null)
   const [settings, setSettings] = useState<Settings>(defaultSettings)
+  const [customInstructions, setCustomInstructions] = useState<CustomInstructions>(defaultCustomInstructions)
   const [results, setResults] = useState<AnalysisResult | null>(null)
   const [error, setError] = useState("")
   const [progressSteps, setProgressSteps] = useState<ProgressStep[]>(initialSteps)
@@ -90,6 +99,7 @@ export default function Home() {
             all: [],
           },
           settings,
+          customInstructions,
         }),
       })
 
@@ -125,7 +135,7 @@ export default function Home() {
     } finally {
       setIsAnalyzing(false)
     }
-  }, [keywords, settings])
+  }, [keywords, settings, customInstructions])
 
   const handleCancel = () => {
     setIsAnalyzing(false)
@@ -236,6 +246,13 @@ export default function Home() {
           {/* SurferSEO Import */}
           <SurferInput
             onDataLoaded={handleSurferDataLoaded}
+            disabled={isAnalyzing}
+          />
+
+          {/* Custom Instructions */}
+          <CustomInstructionsInput
+            value={customInstructions}
+            onChange={setCustomInstructions}
             disabled={isAnalyzing}
           />
 

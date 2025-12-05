@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { crawlPage } from '@/lib/crawler';
 import { analyzeSEO } from '@/lib/seo-analyzer';
 import { optimizeContent } from '@/lib/content-optimizer';
-import type { AnalyzeRequest, AnalysisResult, KeywordData } from '@/types';
+import type { AnalyzeRequest, AnalysisResult, KeywordData, CustomInstructions } from '@/types';
 
 // Extend timeout for Vercel Pro (Claude API calls can take 30-60+ seconds)
 export const maxDuration = 120;
@@ -10,7 +10,7 @@ export const maxDuration = 120;
 export async function POST(request: NextRequest) {
   try {
     const body: AnalyzeRequest = await request.json();
-    const { url, keywords, settings } = body;
+    const { url, keywords, settings, customInstructions } = body;
 
     // Validate URL
     if (!url) {
@@ -63,10 +63,18 @@ export async function POST(request: NextRequest) {
     // Step 2: Analyze SEO
     const seoAnalysis = analyzeSEO(crawledData, safeKeywords);
 
+    // Ensure customInstructions has all required properties
+    const safeCustomInstructions: CustomInstructions = {
+      thingsToAvoid: customInstructions?.thingsToAvoid || '',
+      focusAreas: customInstructions?.focusAreas || '',
+      toneAndStyle: customInstructions?.toneAndStyle || '',
+      additionalInstructions: customInstructions?.additionalInstructions || '',
+    };
+
     // Step 3: Generate optimized content using AI
     let optimizedContent;
     try {
-      optimizedContent = await optimizeContent(crawledData, safeKeywords, settings);
+      optimizedContent = await optimizeContent(crawledData, safeKeywords, settings, safeCustomInstructions);
     } catch (error) {
       console.error('AI optimization error:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
