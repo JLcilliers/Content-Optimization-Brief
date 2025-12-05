@@ -152,13 +152,32 @@ export default function Home() {
     const timeoutId = setTimeout(() => controller.abort(), 90000)
 
     try {
-      // Extract client name and page name from URL
+      // Extract client name and URL slug from URL
       const domain = extractDomain(analyzedUrl)
       const clientName = settings.brandName || domain.split('.')[0] || 'Client'
-      const pathParts = analyzedUrl.split('/').filter(Boolean)
-      const pageName = pathParts[pathParts.length - 1] || 'Homepage'
+
+      // Extract URL slug for filename
+      let urlSlug = 'homepage'
+      try {
+        const parsedUrl = new URL(analyzedUrl)
+        const pathname = parsedUrl.pathname
+        // Remove leading/trailing slashes and get the path
+        const cleanPath = pathname.replace(/^\/+|\/+$/g, '')
+        if (cleanPath) {
+          // Replace remaining slashes with hyphens, convert to lowercase
+          urlSlug = cleanPath.replace(/\//g, '-').toLowerCase()
+        }
+      } catch {
+        // If URL parsing fails, fall back to simple extraction
+        const pathParts = analyzedUrl.split('/').filter(Boolean)
+        urlSlug = pathParts[pathParts.length - 1] || 'homepage'
+      }
+
+      // Sanitize the URL slug for filename (remove special characters)
+      const sanitizedSlug = urlSlug.replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-')
 
       console.log('[handleDownload] Starting document generation request...')
+      console.log('[handleDownload] Client:', clientName, 'URL Slug:', sanitizedSlug)
 
       const response = await fetch('/api/generate-doc', {
         method: 'POST',
@@ -167,7 +186,7 @@ export default function Home() {
           analysisResult: results,
           settings,
           clientName,
-          pageName,
+          pageName: sanitizedSlug, // Pass the URL slug as pageName for document title
         }),
         signal: controller.signal,
       })
@@ -182,16 +201,18 @@ export default function Home() {
         throw new Error('Failed to generate document')
       }
 
-      // Download the file
+      // Download the file with URL-based filename
       const blob = await response.blob()
       console.log('[handleDownload] Blob received, size:', blob.size)
-      const url = window.URL.createObjectURL(blob)
+      const blobUrl = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
-      a.href = url
-      a.download = `${clientName}_${pageName}_Content_Improvement.docx`.replace(/[^a-zA-Z0-9_-]/g, '_')
+      a.href = blobUrl
+      // Sanitize client name for filename
+      const sanitizedClient = clientName.replace(/[^a-zA-Z0-9_-]/g, '_')
+      a.download = `${sanitizedClient}_${sanitizedSlug}_Content_Improvement.docx`
       document.body.appendChild(a)
       a.click()
-      window.URL.revokeObjectURL(url)
+      window.URL.revokeObjectURL(blobUrl)
       document.body.removeChild(a)
 
     } catch (err: unknown) {

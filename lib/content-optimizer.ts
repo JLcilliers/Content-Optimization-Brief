@@ -256,11 +256,10 @@ function generateSchemaRecommendations(
   optimizedData: { faqs?: FAQ[] }
 ): SchemaRecommendation[] {
   const recommendations: SchemaRecommendation[] = [];
-  const url = crawledData.url.toLowerCase();
-  const content = crawledData.bodyContent.toLowerCase();
   const existingSchemaTypes = crawledData.schemaMarkup.map((s) => s.type.toLowerCase());
 
-  // FAQPage schema if FAQs exist
+  // FAQPage schema - ONLY if we have actual FAQ content
+  // This uses the real Q&As from the optimized content
   if (optimizedData.faqs && optimizedData.faqs.length > 0 && !existingSchemaTypes.includes('faqpage')) {
     const faqSchema = {
       '@context': 'https://schema.org',
@@ -277,93 +276,19 @@ function generateSchemaRecommendations(
 
     recommendations.push({
       type: 'FAQPage',
-      reason: 'Add FAQ schema to enable rich FAQ snippets in search results',
+      reason: 'Add FAQ schema to enable rich FAQ snippets in search results. This schema uses the actual Q&As from the optimized content above.',
       jsonLd: JSON.stringify(faqSchema, null, 2),
     });
   }
 
-  // Article/BlogPosting schema for blog-like content
-  if (
-    (url.includes('/blog') || url.includes('/article') || url.includes('/news') || url.includes('/post')) &&
-    !existingSchemaTypes.includes('article') &&
-    !existingSchemaTypes.includes('blogposting')
-  ) {
-    recommendations.push({
-      type: 'Article/BlogPosting',
-      reason: 'Add Article schema for blog posts to improve search visibility',
-      jsonLd: JSON.stringify({
-        '@context': 'https://schema.org',
-        '@type': 'Article',
-        headline: optimizedData.faqs ? 'Your Article Title' : crawledData.title,
-        description: crawledData.metaDescription,
-        author: { '@type': 'Organization', name: 'Your Organization' },
-        publisher: { '@type': 'Organization', name: 'Your Organization' },
-        datePublished: new Date().toISOString().split('T')[0],
-      }, null, 2),
-    });
-  }
-
-  // Service schema for service pages
-  if (
-    (url.includes('/service') || url.includes('/what-we-do') || content.includes('our services')) &&
-    !existingSchemaTypes.includes('service')
-  ) {
-    recommendations.push({
-      type: 'Service',
-      reason: 'Add Service schema to highlight your offerings in search results',
-      jsonLd: JSON.stringify({
-        '@context': 'https://schema.org',
-        '@type': 'Service',
-        name: 'Service Name',
-        description: 'Service description',
-        provider: { '@type': 'Organization', name: 'Your Organization' },
-      }, null, 2),
-    });
-  }
-
-  // LocalBusiness schema for location-based pages
-  if (
-    (url.includes('/location') || url.includes('/contact') || content.includes('visit us') || content.includes('our location')) &&
-    !existingSchemaTypes.includes('localbusiness')
-  ) {
-    recommendations.push({
-      type: 'LocalBusiness',
-      reason: 'Add LocalBusiness schema to appear in local search results and Google Maps',
-      jsonLd: JSON.stringify({
-        '@context': 'https://schema.org',
-        '@type': 'LocalBusiness',
-        name: 'Business Name',
-        address: {
-          '@type': 'PostalAddress',
-          streetAddress: '123 Main St',
-          addressLocality: 'City',
-          addressRegion: 'State',
-          postalCode: '12345',
-        },
-        telephone: '+1-xxx-xxx-xxxx',
-      }, null, 2),
-    });
-  }
-
-  // HowTo schema for instructional content
-  if (
-    (content.includes('how to') || content.includes('step 1') || content.includes('step by step')) &&
-    !existingSchemaTypes.includes('howto')
-  ) {
-    recommendations.push({
-      type: 'HowTo',
-      reason: 'Add HowTo schema for instructional content to get enhanced search snippets',
-      jsonLd: JSON.stringify({
-        '@context': 'https://schema.org',
-        '@type': 'HowTo',
-        name: 'How to...',
-        step: [
-          { '@type': 'HowToStep', text: 'Step 1 description' },
-          { '@type': 'HowToStep', text: 'Step 2 description' },
-        ],
-      }, null, 2),
-    });
-  }
+  // NOTE: We intentionally do NOT include the following schemas with placeholder content:
+  // - Article/BlogPosting: Would require placeholder author/publisher info
+  // - Service: Would require placeholder service name/description
+  // - LocalBusiness: Would require placeholder address/phone
+  // - HowTo: Would require extracting actual steps from content
+  //
+  // These schemas should only be recommended when we can populate them with real content.
+  // The FAQPage schema above is the only one we can fully populate from the optimization results.
 
   return recommendations;
 }
