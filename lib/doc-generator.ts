@@ -1115,6 +1115,22 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
   // First filter out footer content
   let processedContent = filterFooterContent(content);
 
+  // CRITICAL: Strip FAQ section from fullContent since FAQs are handled separately
+  // The AI sometimes includes FAQs in fullContent with [[NEW FAQ SECTION]] marker
+  // We need to remove everything from [[NEW FAQ SECTION]] onwards to prevent duplicates
+  const faqSectionIndex = processedContent.search(/\[\[NEW FAQ SECTION\]\]/i);
+  if (faqSectionIndex !== -1) {
+    console.log('[doc-generator] Found FAQ section in content at index', faqSectionIndex, '- stripping to prevent duplicate');
+    processedContent = processedContent.substring(0, faqSectionIndex).trim();
+  }
+
+  // Also check for "Frequently Asked Questions" heading that might indicate embedded FAQ
+  const faqHeadingMatch = processedContent.match(/\[H2\]\s*Frequently Asked Questions/i);
+  if (faqHeadingMatch && faqHeadingMatch.index !== undefined) {
+    console.log('[doc-generator] Found FAQ heading in content - stripping to prevent duplicate');
+    processedContent = processedContent.substring(0, faqHeadingMatch.index).trim();
+  }
+
   // Clean residual markdown/HTML but KEEP the [[KEYWORD:]] markers
   // We only clean markdown/HTML, not our custom markers
   processedContent = processedContent
@@ -1198,6 +1214,7 @@ function parseContentToParagraphs(content: string, originalContent?: string): Pa
       /^\[BULLET\]$/i,              // Empty BULLET marker
       /^\[H[123]\]$/i,              // Empty heading marker
       /^\[\[NEW\]\]$/i,             // Standalone [[NEW]] marker
+      /^\[\[NEW FAQ SECTION\]\]/i,  // FAQ section marker (FAQs handled separately)
       /^\[PARA\s*\(/i,              // [PARA (http... junk
       /^\(https?:\/\//i,            // Bare URLs starting with (http
       /^https?:\/\/[^\s]+$/i,       // Standalone URLs
@@ -1460,6 +1477,11 @@ function convertLineToTextRuns(
   }
 
   let processedLine = line;
+
+  // Step 0: Strip any [[...]] markers that aren't KEYWORD or ADJUSTED
+  // This catches [[NEW]], [[NEW FAQ SECTION]], and any other internal markers
+  processedLine = processedLine.replace(/\[\[NEW[^\]]*\]\]/gi, '');  // [[NEW]], [[NEW FAQ SECTION]], etc.
+  processedLine = processedLine.replace(/\[\[(?!KEYWORD:|ADJUSTED:)[^\]]*\]\]/g, '');  // Any other [[...]] markers
 
   // Step 1: Fix spacing around [[KEYWORD:]] and [[ADJUSTED:]] markers
   // Add space BEFORE [[ if preceded by word character
