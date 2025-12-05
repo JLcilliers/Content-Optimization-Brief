@@ -310,11 +310,10 @@ function createHighlightedBullet(
   });
 }
 
-// Helper to truncate text for table display
-function truncateText(text: string, maxLength: number): string {
+// Helper to display text in table cells (no truncation - show full text)
+function displayText(text: string): string {
   if (!text) return 'Not set';
-  if (text.length <= maxLength) return text;
-  return text.substring(0, maxLength - 3) + '...';
+  return text;
 }
 
 // Create comparison table for current vs optimized meta elements
@@ -424,8 +423,8 @@ function createComparisonTable(
       new TableRow({
         children: [
           createLabelCell('Title Tag'),
-          createContentCell(truncateText(crawledData.title, 50)),
-          createOptimizedCell(truncateText(cleanMarkersForDisplay(optimizedContent.metaTitle), 50)),
+          createContentCell(displayText(crawledData.title)),
+          createOptimizedCell(displayText(cleanMarkersForDisplay(optimizedContent.metaTitle))),
           createWhyCell('Primary keyword in first 30 chars, optimal length'),
         ],
       }),
@@ -433,8 +432,8 @@ function createComparisonTable(
       new TableRow({
         children: [
           createLabelCell('Meta Description'),
-          createContentCell(truncateText(crawledData.metaDescription, 60)),
-          createOptimizedCell(truncateText(cleanMarkersForDisplay(optimizedContent.metaDescription), 60)),
+          createContentCell(displayText(crawledData.metaDescription)),
+          createOptimizedCell(displayText(cleanMarkersForDisplay(optimizedContent.metaDescription))),
           createWhyCell('Added CTA, included target keyword, compelling copy'),
         ],
       }),
@@ -763,14 +762,6 @@ export async function generateDocument(options: DocGeneratorOptions): Promise<Bu
                 ...generateSchemaParagraphs(optimizedContent.schemaRecommendations),
               ]
             : []),
-
-          // Spacer before table
-          new Paragraph({
-            spacing: { before: 400, after: 200 },
-          }),
-
-          // Metadata Table
-          createMetadataTable(crawledData, optimizedContent, keywords, settings),
         ],
       },
     ],
